@@ -208,7 +208,7 @@ async function identifyRelevantDOMParts(apiKey, userQuestion, domSummary) {
     throw new Error('API key is required');
   }
 
-  const prompt = `You are analyzing a user's question about a webpage's HTML DOM structure.
+  const prompt = `Analyze the user's question and identify which DOM parts are needed to answer it.
 
 **User's Question:**
 "${userQuestion}"
@@ -217,21 +217,18 @@ async function identifyRelevantDOMParts(apiKey, userQuestion, domSummary) {
 ${domSummary}
 
 **Task:**
-Analyze the user's question and determine which specific parts of the DOM are relevant to answer it.
-
-Return ONLY a valid JSON object in this exact format:
+Determine the relevant DOM parts and return ONLY a valid JSON object:
 {
   "relevantSelectors": ["selector1", "selector2", ...],
   "relevantSections": ["section1", "section2", ...],
   "needsCSS": true/false,
   "needsJS": true/false,
-  "reasoning": "Brief explanation of what parts are needed"
+  "reasoning": "Brief explanation"
 }
 
-**Important:**
-- Provide specific CSS selectors that identify the relevant elements
-- If the question is about structure, include parent-child relationships
-- If the question is about styling, set needsCSS to true
+**Notes:**
+- Provide specific CSS selectors for relevant elements
+- Set needsCSS: true if question involves styling
 - Return ONLY the JSON object, nothing else`;
 
   try {
@@ -297,7 +294,7 @@ async function answerDOMQuestion(apiKey, userQuestion, relevantDOM) {
     throw new Error('API key is required');
   }
 
-  const prompt = `You are an expert web developer analyzing a webpage's HTML DOM structure and answering detailed questions about it.
+  const prompt = `You are an expert web developer analyzing a webpage's HTML DOM structure. Answer the user's question concisely and clearly.
 
 **User's Question:**
 "${userQuestion}"
@@ -306,15 +303,19 @@ async function answerDOMQuestion(apiKey, userQuestion, relevantDOM) {
 ${relevantDOM}
 
 **Instructions:**
-1. Analyze the user's question carefully
-2. Provide a detailed, helpful answer based on the DOM structure
-3. Include specific CSS selectors, element paths, or code examples when relevant
-4. Be thorough but concise
-5. If the question asks for selectors, provide accurate CSS selectors
-6. If the question asks about structure, explain the element hierarchy
-7. Format your answer clearly using markdown if helpful
+- Be CONCISE and direct - answer only what's asked, no unnecessary explanations
+- Use light markdown formatting for readability:
+  - Use \`inline code\` for CSS selectors, class names, IDs, and code snippets
+  - Use \`\`\`code blocks\`\`\` only for multi-line code examples
+  - Use **bold** sparingly for emphasis
+  - Use bullet points (-) for lists when helpful
+  - Keep paragraphs short (2-3 sentences max)
+- When providing selectors or code, put them in \`backticks\`
+- If the question asks for a selector, provide it immediately with minimal context
+- If the question asks about structure, use a brief bullet list or code block
+- Avoid verbose introductions or conclusions - get straight to the point
 
-**Answer the user's question:**`;
+**Answer concisely:**`;
 
   try {
     const response = await fetch(CLAUDE_API_URL, {
@@ -327,14 +328,14 @@ ${relevantDOM}
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,
-        max_tokens: 4096,
+        max_tokens: 2048, // Reduced to encourage conciseness
         messages: [
           {
             role: 'user',
             content: prompt
           }
         ],
-        temperature: 0.3
+        temperature: 0.2 // Lower temperature for more focused, concise responses
       })
     });
 
@@ -356,6 +357,119 @@ ${relevantDOM}
 
   } catch (error) {
     console.error('Failed to answer DOM question:', error);
+    throw error;
+  }
+}
+
+/**
+ * Perform a DOM task based on user request (for auto mode)
+ * @param {string} apiKey - User's Anthropic API key
+ * @param {string} userRequest - User's task request (e.g., "Change button color to red")
+ * @param {string} relevantDOM - Full HTML and CSS of relevant DOM parts
+ * @param {Array<string>} relevantSelectors - CSS selectors of relevant elements
+ * @returns {Promise<Object>} - Response with modifications to apply
+ */
+async function performDOMTask(apiKey, userRequest, relevantDOM, relevantSelectors) {
+  if (!apiKey) {
+    throw new Error('API key is required');
+  }
+
+  const prompt = `You are an expert web developer. The user wants you to perform a task on a webpage's HTML DOM.
+
+**User's Request:**
+"${userRequest}"
+
+**Relevant DOM Context:**
+${relevantDOM}
+
+**Relevant Element Selectors:**
+${relevantSelectors.map(s => `- ${s}`).join('\n')}
+
+**Task:**
+Analyze the user's request and determine what modifications need to be made to the DOM to accomplish it.
+
+Return ONLY a valid JSON object in this exact format:
+{
+  "modifications": [
+    {
+      "selector": "CSS selector for the element(s) to modify",
+      "action": "modify|remove|hide",
+      "css_changes": "CSS rules to apply (empty string if no CSS changes)",
+      "html_changes": "New HTML for the element (empty string if no HTML changes)",
+      "explanation": "Brief explanation of this modification"
+    }
+  ],
+  "summary": "Brief summary of what was done"
+}
+
+**Instructions:**
+- Be CONCISE and direct
+- Provide specific CSS selectors that accurately target the elements to modify
+- If the task is to remove an element, use "action": "remove" and leave css_changes/html_changes empty
+- If the task is to hide an element, use "action": "hide" and leave css_changes/html_changes empty
+- For CSS changes, provide complete CSS rules (e.g., "color: red; background-color: blue;")
+- For HTML changes, provide the complete new HTML for the element (not just a snippet)
+- If multiple elements need modification, include multiple objects in the modifications array
+- Use the relevant selectors provided, but you can also use more specific selectors if needed
+
+**Important:**
+- Return ONLY the JSON object, nothing else
+- Ensure all CSS selectors are accurate and will match the intended elements
+- If the task cannot be accomplished, return an empty modifications array with an explanation in summary`;
+
+  try {
+    const response = await fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 2048,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        `Claude API error: ${response.status} - ${errorData.error?.message || response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+    const textContent = data.content?.[0]?.text;
+
+    if (!textContent) {
+      throw new Error('No response content from Claude');
+    }
+
+    // Parse JSON response
+    let jsonText = textContent.trim();
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/```json?\n?/g, '').replace(/```\s*$/g, '');
+    }
+
+    const parsed = JSON.parse(jsonText);
+    
+    // Validate response structure
+    if (!parsed.modifications || !Array.isArray(parsed.modifications)) {
+      throw new Error('Invalid response format: modifications must be an array');
+    }
+
+    return parsed;
+
+  } catch (error) {
+    console.error('Failed to perform DOM task:', error);
     throw error;
   }
 }

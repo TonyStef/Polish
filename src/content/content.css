@@ -504,15 +504,13 @@ body.polish-overlay-active {
 
 /* Phone mode - centered phone-sized preview with bezel */
 body.polish-overlay-active.polish-phone-mode {
-  width: 391px !important; /* 375px content + 16px bezel (8px each side) */
-  min-width: 391px !important;
-  max-width: 391px !important;
-  height: 852px !important; /* 812px content + 40px bezel (20px top/bottom) */
+  width: 391px; /* 375px content + 16px bezel (8px each side) */
+  height: 852px; /* 812px content + 40px bezel (20px top/bottom) */
   max-height: calc(100vh - 80px);
   /* Center horizontally: left panel (400px) + (available width - phone width) / 2 */
-  left: calc(400px + ((100vw - 400px) - 391px) / 2) !important;
+  left: calc(400px + ((100vw - 400px) - 391px) / 2);
   /* Center vertically: top bar (56px) + (available height - phone height) / 2 */
-  top: calc(56px + max(0px, ((100vh - 56px) - min(852px, calc(100vh - 80px))) / 2)) !important;
+  top: calc(56px + max(0px, ((100vh - 56px) - min(852px, calc(100vh - 80px))) / 2));
   overflow: hidden;
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.4);
   border-radius: 20px;
@@ -520,7 +518,6 @@ body.polish-overlay-active.polish-phone-mode {
   padding: 20px 8px;
   box-sizing: border-box;
   position: fixed;
-  transform-origin: top center;
 }
 
 /* Phone mode - inner scrollable content area */
@@ -544,44 +541,14 @@ body.polish-overlay-active.polish-phone-mode::before {
   pointer-events: none;
 }
 
-/* Phone mode - constrain html element to phone viewport */
-html.polish-overlay-active.polish-phone-mode {
-  width: 375px !important;
-  min-width: 375px !important;
-  max-width: 375px !important;
-  overflow-x: hidden;
-  /* Force mobile rendering */
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
-}
-
-/* Phone mode - ensure document body respects viewport */
-html.polish-overlay-active.polish-phone-mode body {
-  width: 375px !important;
-  min-width: 375px !important;
-  max-width: 375px !important;
-  margin: 0 !important;
-}
-
-/* Phone mode - viewport container wrapper (iframe container) */
-.polish-phone-viewport-container {
+/* Phone mode - wrapper div contains all website content */
+#polish-phone-wrapper {
   width: 375px;
-  height: 812px;
-  margin: 0 auto;
+  max-width: 375px;
+  margin: 0;
   position: relative;
-  background: transparent;
-  box-sizing: border-box;
-  overflow: hidden;
-  border-radius: 8px;
-}
-
-/* Phone mode - iframe */
-#polish-phone-iframe {
-  width: 100% !important;
-  height: 100% !important;
-  border: 0;
-  display: block;
-  background: white;
+  z-index: 1;
+  background: inherit;
 }
 
 /* Ensure website content flows naturally */
