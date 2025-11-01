@@ -142,22 +142,6 @@ chrome://extensions/
 
 **7. Modifications applied!**
 
----
-
-## 🎨 For UI Developers (Cofounder)
-
-### What You Need to Know
-
-**Backend is 100% complete:**
-- All logic is in `src/popup/popup.js`
-- You don't need to touch any .js files
-- UI structure is in `src/popup/popup.html`
-
-**Your job:**
-1. Design the popup UI (colors, fonts, layout, branding)
-2. Replace `popup.html` with your custom design
-3. Keep element IDs exactly as specified
-4. Style however you want!
 
 ### Getting Started
 
