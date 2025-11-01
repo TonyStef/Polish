@@ -157,7 +157,7 @@ Processing: "Processing..." (.loading class, disabled)
 3. Strict JSON response requirement
 
 **Configuration:**
-- Model: `claude-haiku-4-5-20251001` (line 14)
+- Model: `claude-sonnet-4-5-20250929` (line 14)
 - Temperature: 0.3 (for consistent code generation)
 - Max tokens: 4096
 

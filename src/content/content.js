@@ -7,6 +7,7 @@ let isSelectionMode = false;
 let currentlyHighlightedElement = null;
 let selectedElement = null;
 let overlayElement = null;
+let selectionContext = null; // Track which document owns the current selection overlay
 let polishOverlayWrapper = null;
 let isOverlayVisible = false;
 
@@ -813,9 +814,30 @@ function handleDeselectElement() {
  * Handle view mode toggle (Phone/Desktop)
  */
 function handleToggleViewMode() {
-  viewMode = viewMode === 'desktop' ? 'phone' : 'desktop';
-  applyViewMode();
-  updateViewModeButton();
+  try {
+    viewMode = viewMode === 'desktop' ? 'phone' : 'desktop';
+    applyViewMode();
+    updateViewModeButton();
+  } catch (error) {
+    console.error('Phone mode activation failed:', error);
+
+    // Auto-revert to desktop mode on error
+    viewMode = 'desktop';
+
+    // Attempt cleanup
+    try {
+      removePhoneModeWrapper();
+      restoreDesktopViewport();
+    } catch (cleanupError) {
+      console.error('Cleanup failed:', cleanupError);
+    }
+
+    // Update UI to reflect reverted state
+    updateViewModeButton();
+
+    // Notify user
+    showNotification('Phone mode encountered an error and was disabled. Please try again.', 'error');
+  }
 }
 
 // Viewport meta tag reference
@@ -824,24 +846,35 @@ let originalViewportContent = null;
 
 /**
  * Apply current view mode to the website preview
+ * If selection mode is active, migrates it to the new context
  */
 function applyViewMode() {
   if (!document.body.classList.contains('polish-overlay-active')) {
     return; // Only apply when overlay is active
   }
 
+  // If selection mode is active, we need to migrate it to new context
+  const wasSelectionActive = isSelectionMode;
+
+  if (wasSelectionActive) {
+    disableSelectionMode(); // Clean up old context
+  }
+
   if (viewMode === 'phone') {
-    document.documentElement.classList.add('polish-phone-mode');
-    document.body.classList.add('polish-phone-mode');
-    document.body.classList.remove('polish-desktop-mode');
+    // Don't transform body element (prevents overlay clipping bug)
     createPhoneModeWrapper();
     setPhoneViewport();
   } else {
-    document.documentElement.classList.remove('polish-phone-mode');
-    document.body.classList.add('polish-desktop-mode');
-    document.body.classList.remove('polish-phone-mode');
     removePhoneModeWrapper();
     restoreDesktopViewport();
+  }
+
+  // Re-enable selection in new context if it was active
+  if (wasSelectionActive) {
+    // Small delay to ensure iframe is ready (if switching to phone mode)
+    setTimeout(() => {
+      enableSelectionMode();
+    }, 100);
   }
 }
 
@@ -850,40 +883,34 @@ function applyViewMode() {
  */
 function createPhoneModeWrapper() {
   if (phoneModeWrapper) return; // Already exists
-  
-  // Hide original page content (but keep our overlay visible)
-  const originalContent = Array.from(document.body.children).filter(child => 
-    !child.hasAttribute('data-polish-extension') && 
-    child.id !== 'polish-overlay-wrapper'
+
+  // Hide original page content (but keep Polish overlay and wrapper visible)
+  const originalContent = Array.from(document.body.children).filter(child =>
+    !child.hasAttribute('data-polish-extension') &&
+    child.id !== 'polish-overlay-wrapper' &&
+    child.id !== 'polish-phone-wrapper'
   );
-  
+
   // Store reference to original content for restoration
   phoneModeWrapper = {
     container: null,
     iframe: null,
     hiddenContent: originalContent
   };
-  
-  // Create container for phone bezel
+
+  // Create container for phone bezel (styling now in CSS)
   const container = document.createElement('div');
   container.id = 'polish-phone-wrapper';
   container.setAttribute('data-polish-extension', 'true');
-  container.className = 'polish-phone-viewport-container';
-  
+
   // Create iframe that will load the current page
   const iframe = document.createElement('iframe');
   iframe.id = 'polish-phone-iframe';
   iframe.setAttribute('data-polish-extension', 'true');
-  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Mark so content script skips init in iframe
+  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Set BEFORE src to prevent recursion
   iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals');
-  iframe.style.cssText = `
-    width: 100%;
-    height: 100%;
-    border: 0;
-    display: block;
-    background: white;
-  `;
-  
+  // Note: Styling moved to content.css #polish-phone-iframe
+
   // Hide original content
   originalContent.forEach(child => {
     if (child.style) {
@@ -891,8 +918,8 @@ function createPhoneModeWrapper() {
       child.style.display = 'none';
     }
   });
-  
-  // Load current page in iframe
+
+  // Load current page in iframe (data-polish-phone-iframe attribute already set above)
   iframe.src = window.location.href;
   
   // When iframe loads, inject mobile viewport code
@@ -951,11 +978,21 @@ function createPhoneModeWrapper() {
         }
       `;
       iframeDoc.head.appendChild(style);
-      
+
       // Trigger resize event
       iframeWin.dispatchEvent(new Event('resize'));
       iframeWin.dispatchEvent(new Event('orientationchange'));
-      
+
+      // If selection mode was active, re-enable it in iframe context
+      if (isSelectionMode) {
+        // Give iframe a moment to stabilize
+        setTimeout(() => {
+          // Re-initialize selection in iframe context
+          disableSelectionMode();
+          enableSelectionMode();
+        }, 50);
+      }
+
     } catch (e) {
       console.error('Error setting up mobile viewport in iframe:', e);
       // If same-origin policy blocks access, fall back to simpler approach
@@ -1919,33 +1956,90 @@ function toggleSelectionMode() {
 }
 
 /**
+ * Get the correct document and window context for element selection
+ * Returns parent context in desktop mode, iframe context in phone mode
+ * @returns {Object|null} Context object with document, window, and metadata, or null if unavailable
+ */
+function getSelectionContext() {
+  // Check if phone mode is active and iframe is loaded
+  if (phoneModeWrapper?.iframe?.contentDocument) {
+    try {
+      // Test if we can access the iframe document (same-origin check)
+      const iframeDoc = phoneModeWrapper.iframe.contentDocument;
+      const iframeWin = phoneModeWrapper.iframe.contentWindow;
+
+      return {
+        document: iframeDoc,
+        window: iframeWin,
+        isIframe: true,
+        iframeElement: phoneModeWrapper.iframe
+      };
+    } catch (e) {
+      console.warn('Cannot access iframe document (cross-origin):', e);
+      return null;
+    }
+  }
+
+  // Default to parent document (desktop mode or phone mode iframe not ready)
+  return {
+    document: document,
+    window: window,
+    isIframe: false,
+    iframeElement: null
+  };
+}
+
+/**
  * Enable selection mode - add event listeners
+ * Context-aware: works in both desktop mode (parent document) and phone mode (iframe document)
  */
 function enableSelectionMode() {
-  document.addEventListener('mouseover', handleMouseOver, true);
-  document.addEventListener('mouseout', handleMouseOut, true);
-  document.addEventListener('click', handleClick, true);
+  // Get correct context (parent or iframe)
+  const context = getSelectionContext();
 
-  document.body.style.cursor = 'crosshair';
+  if (!context) {
+    showNotification('Cannot enable selection in phone mode - iframe not ready', 'error');
+    return;
+  }
+
+  selectionContext = context;
+
+  // Attach event listeners to correct document
+  context.document.addEventListener('mouseover', handleMouseOver, true);
+  context.document.addEventListener('mouseout', handleMouseOut, true);
+  context.document.addEventListener('click', handleClick, true);
+
+  context.document.body.style.cursor = 'crosshair';
   showNotification('Selection mode active - Click an element to select it');
 }
 
 /**
  * Disable selection mode - remove event listeners
+ * Context-aware: removes listeners from correct document (parent or iframe)
  */
 function disableSelectionMode() {
-  document.removeEventListener('mouseover', handleMouseOver, true);
-  document.removeEventListener('mouseout', handleMouseOut, true);
-  document.removeEventListener('click', handleClick, true);
+  if (!selectionContext) return;
 
-  document.body.style.cursor = '';
-  
+  // Remove event listeners from correct document
+  selectionContext.document.removeEventListener('mouseover', handleMouseOver, true);
+  selectionContext.document.removeEventListener('mouseout', handleMouseOut, true);
+  selectionContext.document.removeEventListener('click', handleClick, true);
+
+  selectionContext.document.body.style.cursor = '';
+
   // Don't hide overlay if we have a selected element - keep it highlighted
   if (!selectedElement) {
     hideOverlay();
   }
-  
+
+  // Remove overlay from correct document if no element is selected
+  if (!selectedElement && overlayElement && overlayElement.parentNode) {
+    overlayElement.remove();
+    overlayElement = null;
+  }
+
   currentlyHighlightedElement = null;
+  selectionContext = null;
 }
 
 /**
@@ -2183,13 +2277,17 @@ function sanitizeHTML(html) {
  * Highlight an element with overlay
  */
 function highlightElement(element, isSelected = false) {
-  if (!overlayElement) return;
+  if (!overlayElement || !selectionContext) return;
 
+  // getBoundingClientRect() returns coordinates relative to the viewport
+  // In iframe context: relative to iframe's viewport (which is what we want)
+  // In parent context: relative to parent's viewport (which is what we want)
+  // Since overlay is in the same document as the element, coordinates align perfectly
   const rect = element.getBoundingClientRect();
 
   overlayElement.style.display = 'block';
   overlayElement.style.position = 'fixed'; // Use fixed positioning for better accuracy
-  overlayElement.style.top = `${rect.top}px`; // getBoundingClientRect() already gives viewport coordinates
+  overlayElement.style.top = `${rect.top}px`;
   overlayElement.style.left = `${rect.left}px`;
   overlayElement.style.width = `${rect.width}px`;
   overlayElement.style.height = `${rect.height}px`;
@@ -2227,7 +2325,18 @@ function hideOverlay() {
  * Create overlay element for highlighting
  */
 function createOverlay() {
-  overlayElement = document.createElement('div');
+  if (!selectionContext) {
+    console.error('Cannot create overlay - no selection context');
+    return;
+  }
+
+  // Remove old overlay if it exists
+  if (overlayElement && overlayElement.parentNode) {
+    overlayElement.remove();
+  }
+
+  // Create overlay in correct document (parent or iframe)
+  overlayElement = selectionContext.document.createElement('div');
   overlayElement.setAttribute('data-polish-extension', 'true');
   overlayElement.className = 'polish-element-overlay';
   overlayElement.style.cssText = `
@@ -2238,7 +2347,7 @@ function createOverlay() {
     box-sizing: border-box;
   `;
 
-  document.body.appendChild(overlayElement);
+  selectionContext.document.body.appendChild(overlayElement);
 }
 
 /**
