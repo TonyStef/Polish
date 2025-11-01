@@ -1325,6 +1325,13 @@ async function handleSend() {
     return;
   }
 
+  // Handle Chat mode differently
+  if (currentMode === 'chat') {
+    await handleChatSend(userRequest);
+    return;
+  }
+
+  // Edit mode logic (existing)
   // If in edit mode and no element selected, enable selection mode
   if (currentMode === 'edit' && !selectedElement) {
     if (!isSelectionMode) {
@@ -1435,6 +1442,132 @@ async function handleSend() {
     }
 
     // Re-enable input on error, keep selection if it exists
+    elements.modificationInput.disabled = false;
+    elements.sendBtn.disabled = false;
+    updateUIForState();
+  }
+}
+
+/**
+ * Handle sending messages in Chat mode (two-step API process)
+ */
+async function handleChatSend(userRequest) {
+  // Create user message for chat history
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    timestamp: Date.now(),
+    role: 'user',
+    content: userRequest,
+    mode: 'chat'
+  };
+
+  // Save and display user message
+  try {
+    await saveChatMessage(userMessage);
+    appendMessageToChat(userMessage);
+  } catch (error) {
+    console.error('Failed to save user message:', error);
+  }
+
+  // Disable input during processing
+  elements.modificationInput.disabled = true;
+  elements.sendBtn.disabled = true;
+  elements.modificationInput.value = '';
+  showModificationStatus('Analyzing page structure...', 'loading');
+
+  try {
+    // Step 1: Extract semantic DOM summary
+    const semanticTree = extractSemanticDOM();
+    const domSummary = semanticTreeToString(semanticTree);
+
+    showModificationStatus('Identifying relevant parts...', 'loading');
+
+    // Step 2: Call API to identify relevant DOM parts
+    const identificationResponse = await chrome.runtime.sendMessage({
+      type: 'IDENTIFY_DOM_PARTS',
+      data: {
+        userQuestion: userRequest,
+        domSummary: domSummary
+      }
+    });
+
+    if (!identificationResponse || !identificationResponse.success) {
+      throw new Error(identificationResponse?.error || 'Failed to identify relevant DOM parts');
+    }
+
+    const { relevantSelectors, needsCSS } = identificationResponse.identification;
+
+    showModificationStatus('Extracting relevant content...', 'loading');
+
+    // Step 3: Extract relevant DOM based on identification
+    const relevantDOM = extractRelevantDOM(
+      relevantSelectors || ['body'],
+      needsCSS || false
+    );
+
+    showModificationStatus('Generating answer...', 'loading');
+
+    // Step 4: Get detailed answer with relevant DOM
+    const answerResponse = await chrome.runtime.sendMessage({
+      type: 'ANSWER_DOM_QUESTION',
+      data: {
+        userQuestion: userRequest,
+        relevantDOM: `HTML:\n${relevantDOM.html}\n\nCSS:\n${relevantDOM.css}`
+      }
+    });
+
+    if (!answerResponse || !answerResponse.success) {
+      throw new Error(answerResponse?.error || 'Failed to get answer');
+    }
+
+    // Create assistant message
+    const assistantMessage = {
+      id: `msg_${Date.now() + 1}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: answerResponse.answer,
+      mode: 'chat'
+    };
+
+    // Save and display assistant message
+    try {
+      await saveChatMessage(assistantMessage);
+      appendMessageToChat(assistantMessage);
+    } catch (error) {
+      console.error('Failed to save assistant message:', error);
+    }
+
+    showModificationStatus('Answer generated!', 'success');
+    setTimeout(() => {
+      showModificationStatus('', '');
+      hideNotification();
+    }, 2000);
+
+  } catch (error) {
+    console.error('Chat send failed:', error);
+    let errorMessage = error.message || 'Failed to process question';
+    if (errorMessage.includes('CORS')) {
+      errorMessage = 'API Error: Please check your API key and permissions';
+    }
+    showModificationStatus(errorMessage, 'error');
+
+    // Save error message to chat history
+    const errorMessage_obj = {
+      id: `msg_${Date.now() + 2}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: `Error: ${errorMessage}`,
+      mode: 'chat'
+    };
+
+    try {
+      await saveChatMessage(errorMessage_obj);
+      appendMessageToChat(errorMessage_obj);
+    } catch (saveError) {
+      console.error('Failed to save error message:', saveError);
+    }
+  } finally {
+    // Re-enable input
     elements.modificationInput.disabled = false;
     elements.sendBtn.disabled = false;
     updateUIForState();
@@ -3247,10 +3380,22 @@ function createMessageElement(message) {
 
   div.appendChild(header);
 
-  // Message content
+  // Message content (support markdown-like formatting for chat responses)
   const content = document.createElement('div');
   content.className = 'polish-message-content';
-  content.textContent = message.content;
+  
+  // For chat mode, preserve line breaks and basic formatting
+  if (message.mode === 'chat' && message.role === 'assistant') {
+    // Convert markdown-style code blocks to <pre><code>
+    let formattedContent = message.content
+      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\n/g, '<br>');
+    content.innerHTML = formattedContent;
+  } else {
+    content.textContent = message.content;
+  }
+  
   div.appendChild(content);
 
   // Element context (for edit mode messages)
@@ -3453,6 +3598,194 @@ function isSafeToModify(element) {
   }
 
   return true;
+}
+
+/**
+ * Extract and create a semantic tree representation of the DOM
+ * This creates a compressed, structured representation for LLM processing
+ */
+function extractSemanticDOM() {
+  const body = document.body;
+  if (!body) return {};
+
+  const semanticTree = {
+    url: window.location.href,
+    title: document.title,
+    elements: []
+  };
+
+  // Walk the DOM tree and create semantic representation
+  function walkDOM(node, depth = 0, path = []) {
+    // Skip our extension elements
+    if (node.hasAttribute && node.hasAttribute('data-polish-extension')) {
+      return null;
+    }
+
+    // Limit depth to avoid excessive nesting
+    if (depth > 10) return null;
+
+    // Skip script, style, and other non-content elements
+    const skipTags = ['script', 'style', 'noscript', 'meta', 'link', 'title', 'head'];
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tagName = node.tagName.toLowerCase();
+      if (skipTags.includes(tagName)) {
+        return null;
+      }
+
+      // Skip hidden elements
+      if (node.offsetParent === null && getComputedStyle(node).display === 'none') {
+        return null;
+      }
+
+      // Get text content (first 100 chars)
+      const text = node.textContent?.trim().substring(0, 100) || '';
+      
+      // Get classes and ID
+      const classes = Array.from(node.classList || []);
+      const id = node.id || null;
+      
+      // Generate selector
+      const selector = id ? `#${CSS.escape(id)}` : 
+                      classes.length > 0 ? `.${classes[0]}` : 
+                      tagName;
+
+      // Create semantic representation
+      const semanticNode = {
+        type: tagName,
+        text: text,
+        classes: classes.slice(0, 5), // Limit to 5 classes
+        id: id,
+        selector: selector,
+        path: path.length > 0 ? path.join(' > ') : tagName,
+        children: []
+      };
+
+      // Recurse children
+      const childPath = [...path, `${tagName}${id ? '#' + id : classes.length > 0 ? '.' + classes[0] : ''}`];
+      for (let child of Array.from(node.children)) {
+        const childNode = walkDOM(child, depth + 1, childPath);
+        if (childNode && semanticNode.children.length < 20) { // Limit children
+          semanticNode.children.push(childNode);
+        }
+      }
+
+      return semanticNode;
+    }
+    return null;
+  }
+
+  // Walk the body
+  for (let child of Array.from(body.children)) {
+    const node = walkDOM(child, 0, []);
+    if (node) {
+      semanticTree.elements.push(node);
+    }
+  }
+
+  return semanticTree;
+}
+
+/**
+ * Convert semantic tree to string for LLM consumption
+ */
+function semanticTreeToString(semanticTree) {
+  let output = `Page: ${semanticTree.title}\nURL: ${semanticTree.url}\n\nElements:\n\n`;
+
+  function formatNode(node, indent = 0) {
+    if (!node) return '';
+    const prefix = '  '.repeat(indent);
+    let result = `${prefix}- <${node.type}>`;
+    
+    if (node.id) result += ` #${node.id}`;
+    if (node.classes.length > 0) result += ` .${node.classes.join('.')}`;
+    if (node.text) result += ` "${node.text.substring(0, 50)}"`;
+    result += `\n    Selector: ${node.selector}\n    Path: ${node.path}\n`;
+    
+    if (node.children && node.children.length > 0) {
+      node.children.forEach(child => {
+        result += formatNode(child, indent + 1);
+      });
+    }
+    
+    return result;
+  }
+
+  semanticTree.elements.slice(0, 50).forEach(element => {
+    output += formatNode(element);
+    output += '\n';
+  });
+
+  return output;
+}
+
+/**
+ * Extract relevant DOM parts based on selectors and needs
+ */
+function extractRelevantDOM(selectors, needsCSS = false) {
+  let relevantHTML = '';
+  let relevantCSS = '';
+
+  // Extract elements matching selectors
+  const elements = [];
+  const addedElements = new Set(); // Avoid duplicates
+  
+  selectors.forEach(selector => {
+    try {
+      const matches = document.querySelectorAll(selector);
+      matches.forEach(el => {
+        if (!el.hasAttribute('data-polish-extension') && !addedElements.has(el)) {
+          elements.push(el);
+          addedElements.add(el);
+        }
+      });
+    } catch (e) {
+      console.warn(`Invalid selector: ${selector}`, e);
+    }
+  });
+
+  // Extract HTML for matched elements
+  elements.slice(0, 10).forEach(el => { // Limit to 10 elements
+    const clone = el.cloneNode(true);
+    // Remove our extension elements from clone
+    clone.querySelectorAll('[data-polish-extension]').forEach(ext => ext.remove());
+    const html = clone.outerHTML;
+    if (html.length > 5000) {
+      relevantHTML += html.substring(0, 5000) + '\n<!-- ... truncated ... -->\n\n';
+    } else {
+      relevantHTML += html + '\n\n';
+    }
+  });
+
+  // Extract CSS if needed
+  if (needsCSS) {
+    const stylesheets = Array.from(document.styleSheets);
+    stylesheets.forEach(sheet => {
+      try {
+        const rules = Array.from(sheet.cssRules || []);
+        rules.forEach(rule => {
+          // Check if rule matches any of our selectors
+          if (selectors.some(sel => {
+            try {
+              return document.querySelector(sel) && rule.selectorText && 
+                     document.querySelector(sel).matches(rule.selectorText);
+            } catch {
+              return false;
+            }
+          })) {
+            relevantCSS += rule.cssText + '\n';
+          }
+        });
+      } catch (e) {
+        // Cross-origin stylesheets will throw
+      }
+    });
+  }
+
+  return {
+    html: relevantHTML.substring(0, 30000), // Limit total size
+    css: relevantCSS.substring(0, 10000),
+    elementCount: elements.length
+  };
 }
 
 // Initialize when DOM is ready
