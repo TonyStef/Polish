@@ -15,6 +15,7 @@ let currentMode = 'edit'; // 'edit' or 'chat'
 let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
+let phoneModeViewportWrapper = null; // Inner viewport wrapper for phone mode
 
 // Versioning state
 let currentProjectId = null; // Current project ID
@@ -74,6 +75,12 @@ const elements = {
  */
 function init() {
   console.log('Polish content script initialized');
+
+  // Don't initialize if we're inside the phone iframe (avoid duplicate overlays)
+  if (window.frameElement && window.frameElement.hasAttribute('data-polish-phone-iframe')) {
+    console.log('Skipping init - inside phone iframe');
+    return;
+  }
 
   // Set up message listener FIRST so it's ready immediately
   chrome.runtime.onMessage.addListener(handleMessage);
@@ -769,6 +776,10 @@ function handleToggleViewMode() {
   updateViewModeButton();
 }
 
+// Viewport meta tag reference
+let viewportMetaTag = null;
+let originalViewportContent = null;
+
 /**
  * Apply current view mode to the website preview
  */
@@ -778,63 +789,289 @@ function applyViewMode() {
   }
 
   if (viewMode === 'phone') {
+    document.documentElement.classList.add('polish-phone-mode');
     document.body.classList.add('polish-phone-mode');
     document.body.classList.remove('polish-desktop-mode');
     createPhoneModeWrapper();
+    setPhoneViewport();
   } else {
+    document.documentElement.classList.remove('polish-phone-mode');
     document.body.classList.add('polish-desktop-mode');
     document.body.classList.remove('polish-phone-mode');
     removePhoneModeWrapper();
+    restoreDesktopViewport();
   }
 }
 
 /**
- * Create wrapper div for phone mode to constrain website content
+ * Create iframe wrapper for phone mode that loads the page in mobile viewport
  */
 function createPhoneModeWrapper() {
   if (phoneModeWrapper) return; // Already exists
   
-  // Create wrapper div
-  phoneModeWrapper = document.createElement('div');
-  phoneModeWrapper.id = 'polish-phone-wrapper';
-  phoneModeWrapper.setAttribute('data-polish-extension', 'true');
-  phoneModeWrapper.style.cssText = `
-    width: 375px;
-    max-width: 375px;
-    margin: 0;
-    position: relative;
-    background: inherit;
-    min-height: 100%;
-  `;
-  
-  // Move all body children into wrapper (except our extension elements)
-  const children = Array.from(document.body.children).filter(child => 
-    !child.hasAttribute('data-polish-extension') && child.id !== 'polish-overlay-wrapper'
+  // Hide original page content (but keep our overlay visible)
+  const originalContent = Array.from(document.body.children).filter(child => 
+    !child.hasAttribute('data-polish-extension') && 
+    child.id !== 'polish-overlay-wrapper'
   );
   
-  children.forEach(child => {
-    phoneModeWrapper.appendChild(child);
+  // Store reference to original content for restoration
+  phoneModeWrapper = {
+    container: null,
+    iframe: null,
+    hiddenContent: originalContent
+  };
+  
+  // Create container for phone bezel
+  const container = document.createElement('div');
+  container.id = 'polish-phone-wrapper';
+  container.setAttribute('data-polish-extension', 'true');
+  container.className = 'polish-phone-viewport-container';
+  
+  // Create iframe that will load the current page
+  const iframe = document.createElement('iframe');
+  iframe.id = 'polish-phone-iframe';
+  iframe.setAttribute('data-polish-extension', 'true');
+  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Mark so content script skips init in iframe
+  iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals');
+  iframe.style.cssText = `
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: white;
+  `;
+  
+  // Hide original content
+  originalContent.forEach(child => {
+    if (child.style) {
+      child.dataset.polishOriginalDisplay = child.style.display || '';
+      child.style.display = 'none';
+    }
   });
   
-  // Insert wrapper as first child of body
-  document.body.insertBefore(phoneModeWrapper, document.body.firstChild);
+  // Load current page in iframe
+  iframe.src = window.location.href;
+  
+  // When iframe loads, inject mobile viewport code
+  iframe.onload = () => {
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+      const iframeWin = iframe.contentWindow;
+      
+      // Set viewport meta tag
+      let viewportMeta = iframeDoc.querySelector('meta[name="viewport"]');
+      if (viewportMeta) {
+        viewportMeta.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no');
+      } else {
+        viewportMeta = iframeDoc.createElement('meta');
+        viewportMeta.name = 'viewport';
+        viewportMeta.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no');
+        iframeDoc.head.insertBefore(viewportMeta, iframeDoc.head.firstChild);
+      }
+      
+      // Override window dimensions
+      try {
+        Object.defineProperty(iframeWin, 'innerWidth', {
+          get: () => 375,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'innerHeight', {
+          get: () => 812,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'outerWidth', {
+          get: () => 375,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'outerHeight', {
+          get: () => 812,
+          configurable: true
+        });
+      } catch (e) {
+        console.warn('Could not override iframe window dimensions:', e);
+      }
+      
+      // Constrain html and body to 375px
+      const style = iframeDoc.createElement('style');
+      style.id = 'polish-mobile-viewport-style';
+      style.textContent = `
+        html, body {
+          width: 375px !important;
+          min-width: 375px !important;
+          max-width: 375px !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow-x: hidden !important;
+        }
+        * {
+          box-sizing: border-box;
+        }
+      `;
+      iframeDoc.head.appendChild(style);
+      
+      // Trigger resize event
+      iframeWin.dispatchEvent(new Event('resize'));
+      iframeWin.dispatchEvent(new Event('orientationchange'));
+      
+    } catch (e) {
+      console.error('Error setting up mobile viewport in iframe:', e);
+      // If same-origin policy blocks access, fall back to simpler approach
+      showNotification('Note: Mobile view may not fully activate due to page security settings', 'warning');
+    }
+  };
+  
+  container.appendChild(iframe);
+  phoneModeWrapper.container = container;
+  phoneModeWrapper.iframe = iframe;
+  
+  // Insert container into body
+  document.body.insertBefore(container, document.body.firstChild);
 }
 
 /**
  * Remove phone mode wrapper and restore original structure
  */
 function removePhoneModeWrapper() {
-  if (!phoneModeWrapper) return;
+  if (!phoneModeWrapper || !phoneModeWrapper.container) return;
   
-  // Move all wrapper children back to body
-  const children = Array.from(phoneModeWrapper.children);
-  children.forEach(child => {
-    document.body.insertBefore(child, phoneModeWrapper);
-  });
+  // Show original content
+  if (phoneModeWrapper.hiddenContent) {
+    phoneModeWrapper.hiddenContent.forEach(child => {
+      if (child.dataset.polishOriginalDisplay !== undefined) {
+        child.style.display = child.dataset.polishOriginalDisplay;
+        delete child.dataset.polishOriginalDisplay;
+      } else {
+        child.style.display = '';
+      }
+    });
+  }
   
-  // Remove wrapper
-  phoneModeWrapper.remove();
+  // Remove iframe container
+  phoneModeWrapper.container.remove();
   phoneModeWrapper = null;
+}
+
+/**
+ * Set viewport to phone dimensions (375x812)
+ */
+function setPhoneViewport() {
+  // Find or create viewport meta tag
+  viewportMetaTag = document.querySelector('meta[name="viewport"]');
+  
+  if (viewportMetaTag) {
+    // Save original viewport content
+    originalViewportContent = viewportMetaTag.getAttribute('content');
+    // Set phone viewport - force 375px width for mobile rendering
+    viewportMetaTag.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+  } else {
+    // Create new viewport meta tag
+    viewportMetaTag = document.createElement('meta');
+    viewportMetaTag.name = 'viewport';
+    viewportMetaTag.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+    const head = document.head || document.getElementsByTagName('head')[0];
+    head.insertBefore(viewportMetaTag, head.firstChild);
+    originalViewportContent = null; // No original to restore
+  }
+  
+  // Add a style element to override viewport dimensions via CSS
+  // This helps ensure media queries respond correctly
+  let phoneViewportStyle = document.getElementById('polish-phone-viewport-style');
+  if (!phoneViewportStyle) {
+    phoneViewportStyle = document.createElement('style');
+    phoneViewportStyle.id = 'polish-phone-viewport-style';
+    phoneViewportStyle.setAttribute('data-polish-extension', 'true');
+    phoneViewportStyle.textContent = `
+      /* Force mobile viewport behavior */
+      html.polish-phone-mode {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+        overflow-x: hidden;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      
+      html.polish-phone-mode body {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      
+      /* Make the viewport wrapper act as a proper container */
+      #polish-phone-viewport {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+      }
+      
+      /* Constrain all content within viewport to 375px */
+      #polish-phone-viewport * {
+        max-width: 375px !important;
+        box-sizing: border-box;
+      }
+      
+      /* Force media queries to trigger at mobile breakpoints */
+      @media screen and (max-width: 767px) {
+        html.polish-phone-mode body,
+        html.polish-phone-mode #polish-phone-viewport {
+          width: 375px !important;
+        }
+      }
+      
+      /* Override common desktop-only styles */
+      html.polish-phone-mode body > *:not([data-polish-extension]) {
+        width: 100% !important;
+        max-width: 375px !important;
+      }
+    `;
+    document.head.appendChild(phoneViewportStyle);
+  }
+  
+  // Note: Window dimension overrides are now handled inside the iframe
+  // This function is called after iframe is created
+}
+
+/**
+ * Restore desktop viewport
+ */
+function restoreDesktopViewport() {
+  // Remove phone viewport style
+  const phoneViewportStyle = document.getElementById('polish-phone-viewport-style');
+  if (phoneViewportStyle) {
+    phoneViewportStyle.remove();
+  }
+  
+  // Restore original window dimensions
+  try {
+    delete window.innerWidth;
+    delete window.innerHeight;
+    delete window.outerWidth;
+    delete window.outerHeight;
+  } catch (e) {
+    console.warn('Could not restore window dimensions:', e);
+  }
+  
+  if (viewportMetaTag) {
+    if (originalViewportContent) {
+      // Restore original viewport content
+      viewportMetaTag.setAttribute('content', originalViewportContent);
+    } else {
+      // Remove the viewport meta tag we created
+      viewportMetaTag.remove();
+    }
+    viewportMetaTag = null;
+    originalViewportContent = null;
+  }
+  
+  // Force reflow
+  document.body.offsetHeight;
+  
+  // Trigger resize event
+  window.dispatchEvent(new Event('resize'));
+  window.dispatchEvent(new Event('orientationchange'));
 }
 
 /**
