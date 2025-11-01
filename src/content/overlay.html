@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polish Overlay</title>
+</head>
+<body>
+  <!-- Top Bar -->
+  <div id="polish-top-bar" class="polish-top-bar">
+    <div class="polish-top-bar-left">
+      <button id="polish-close-btn" class="polish-btn polish-btn-text" title="Close">
+        Close
+      </button>
+      <button id="polish-settings-btn" class="polish-btn polish-btn-icon" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M13.657 8.685a1.5 1.5 0 00.3 1.655l.05.05a1.816 1.816 0 01-.517 2.975 1.816 1.816 0 01-2.975.517l-.05-.05a1.5 1.5 0 00-1.656-.3 1.5 1.5 0 00-.9 1.373v.143a1.816 1.816 0 01-3.632 0v-.071a1.5 1.5 0 00-.981-1.373 1.5 1.5 0 00-1.655.3l-.05.05a1.816 1.816 0 01-2.975-.517 1.816 1.816 0 01.517-2.975l.05-.05a1.5 1.5 0 00.3-1.655 1.5 1.5 0 00-1.373-.9h-.143a1.816 1.816 0 010-3.632h.071a1.5 1.5 0 001.373-.981 1.5 1.5 0 001.655-.3l.05-.05a1.816 1.816 0 012.975.517l.05.05a1.5 1.5 0 001.655.3h.072a1.5 1.5 0 00.9-1.373v-.143a1.816 1.816 0 013.632 0v.071a1.5 1.5 0 00.9 1.373 1.5 1.5 0 001.656.3l.05-.05a1.816 1.816 0 012.975-.517 1.816 1.816 0 01.517 2.975l-.05.05a1.5 1.5 0 00-.3 1.655v.072a1.5 1.5 0 001.373.9h.143a1.816 1.816 0 010 3.632h-.071a1.5 1.5 0 00-1.373.981z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    
+    <div class="polish-top-bar-center">
+      <button id="polish-back-btn" class="polish-btn polish-btn-icon" title="Back">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button id="polish-forward-btn" class="polish-btn polish-btn-icon" title="Forward">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <select id="polish-context-selector" class="polish-context-selector">
+        <option>bloomreach-ai-boost</option>
+      </select>
+    </div>
+    
+    <div class="polish-top-bar-right">
+      <button id="polish-discard-btn" class="polish-btn polish-btn-text polish-btn-danger" title="Discard">
+        Discard
+      </button>
+      <button id="polish-save-btn" class="polish-btn polish-btn-text polish-btn-primary" title="Save">
+        Save
+      </button>
+      <button id="polish-publish-btn" class="polish-btn polish-btn-text polish-btn-primary" title="Publish">
+        Publish
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Container -->
+  <div id="polish-container" class="polish-container">
+    <!-- Left Chat Panel -->
+    <div id="polish-chat-panel" class="polish-chat-panel">
+      <div class="polish-chat-header">
+        <h2>Polish</h2>
+      </div>
+      
+      <div id="polish-chat-messages" class="polish-chat-messages">
+        <!-- Messages will be inserted here -->
+      </div>
+      
+      <div class="polish-chat-input-area">
+        <div class="polish-mode-buttons">
+          <button id="polish-edit-btn" class="polish-mode-btn polish-mode-btn-active" title="Edit Mode">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M11.333 2a1.414 1.414 0 012 2L6 11.333l-3.333 1L4 9l7.333-7.333z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Edit
+          </button>
+          <button id="polish-chat-btn" class="polish-mode-btn" title="Chat Mode">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5.333 12H4a2 2 0 01-2-2V4a2 2 0 012-2h8a2 2 0 012 2v1.333" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M6 10l5.333-5.333a1.414 1.414 0 012 2L8 12l-2 1 1-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Chat
+          </button>
+        </div>
+        
+        <div class="polish-input-wrapper">
+          <textarea 
+            id="polish-modification-input" 
+            class="polish-modification-input" 
+            placeholder="Ask Polish..."
+            rows="1"
+          ></textarea>
+          <button id="polish-send-btn" class="polish-send-btn" title="Send">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14 2L7 9M14 2l-5 12-2-5-5-2 12-5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="polish-share-feedback">
+          <a href="#" id="polish-share-feedback-link" class="polish-link">Share Feedback</a>
+        </div>
+      </div>
+      
+      <!-- API Key Setup Section (hidden by default) -->
+      <div id="polish-api-key-section" class="polish-api-key-section hidden">
+        <h3>API Key Setup</h3>
+        <p class="polish-help-text">Enter your Anthropic API key to get started:</p>
+        <div class="polish-input-group">
+          <input
+            type="password"
+            id="polish-api-key-input"
+            class="polish-input"
+            placeholder="sk-ant-..."
+            autocomplete="off"
+          />
+          <button id="polish-save-api-key-btn" class="polish-btn polish-btn-primary">Save</button>
+        </div>
+        <div id="polish-api-key-status" class="polish-status hidden"></div>
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" class="polish-link">
+          Get your API key from Anthropic →
+        </a>
+      </div>
+      
+      <!-- Selected Element Info (hidden by default) -->
+      <div id="polish-selected-element-info" class="polish-selected-element-info hidden">
+        <div class="polish-info-box">
+          <p class="polish-info-label">Selected element:</p>
+          <p class="polish-info-value">
+            &lt;<span id="polish-selected-element-tag"></span>&gt;<br>
+            <span id="polish-selected-element-selector"></span>
+          </p>
+        </div>
+      </div>
+      
+      <!-- Status Message (hidden by default) -->
+      <div id="polish-modification-status" class="polish-status hidden"></div>
+    </div>
+
+    <!-- Right Content Area (Website will be displayed here) -->
+    <div id="polish-content-area" class="polish-content-area">
+      <!-- Website content will be visible here -->
+    </div>
+  </div>
+</body>
+</html>
+

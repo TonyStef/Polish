@@ -3,7 +3,7 @@
  * Handles Claude API communication and message routing
  */
 
-// Import API utilities
+// Import API utilities (must not use ES6 exports in service workers)
 importScripts('../utils/api.js');
 
 /**
@@ -116,7 +116,7 @@ async function getApiKey() {
  * @param {string} apiKey - API key to save
  * @returns {Promise<void>}
  */
-export async function saveApiKey(apiKey) {
+async function saveApiKey(apiKey) {
   return new Promise((resolve, reject) => {
     chrome.storage.local.set({ anthropicApiKey: apiKey }, () => {
       if (chrome.runtime.lastError) {
@@ -129,15 +129,70 @@ export async function saveApiKey(apiKey) {
 }
 
 /**
+ * Handle extension icon click - toggle overlay
+ */
+chrome.action.onClicked.addListener(async (tab) => {
+  console.log('Extension icon clicked, toggling overlay');
+  
+  // Check if this is a valid page for content scripts
+  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('moz-extension://')) {
+    console.warn('Content scripts cannot run on this page:', tab.url);
+    return;
+  }
+  
+  // Helper function to send toggle message with retry logic
+  const sendToggleMessage = async (retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: 'TOGGLE_OVERLAY'
+        });
+        console.log('Overlay toggle response:', response);
+        return;
+      } catch (error) {
+        // If it's the last retry, check if we need to inject
+        if (i === retries - 1) {
+          // Check if error is because content script doesn't exist
+          if (error.message && error.message.includes('Receiving end does not exist')) {
+            try {
+              console.log('Content script not found, ensuring it\'s injected...');
+              // Inject CSS first
+              await chrome.scripting.insertCSS({
+                target: { tabId: tab.id },
+                files: ['src/content/content.css']
+              });
+              // Inject JS
+              await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['src/content/content.js']
+              });
+              
+              // Wait for initialization and retry
+              await new Promise(resolve => setTimeout(resolve, 200));
+              await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_OVERLAY' });
+            } catch (injectionError) {
+              console.error('Failed to inject content script:', injectionError);
+            }
+          } else {
+            console.error('Failed to toggle overlay:', error);
+          }
+        } else {
+          // Wait a bit before retrying (content script might still be initializing)
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }
+  };
+  
+  await sendToggleMessage();
+});
+
+/**
  * Installation handler
  */
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('Polish extension installed:', details.reason);
-
-  if (details.reason === 'install') {
-    // Open options page on first install
-    chrome.runtime.openOptionsPage();
-  }
+  // API key setup is handled in the overlay UI, no options page needed
 });
 
 console.log('Polish service worker initialized');

@@ -12,9 +12,7 @@ let isOverlayVisible = false;
 
 // State management
 let currentMode = 'edit'; // 'edit' or 'chat'
-let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
-let phoneModeWrapper = null; // Wrapper div for phone mode
 
 // DOM elements cache
 const elements = {
@@ -39,14 +37,7 @@ const elements = {
   selectedElementTag: null,
   selectedElementSelector: null,
   modificationStatus: null,
-  chatMessages: null,
-  floatingApiKeyOverlay: null,
-  floatingApiKeyInput: null,
-  floatingSaveApiKeyBtn: null,
-  floatingApiKeyStatus: null,
-  floatingNotification: null,
-  deselectElementBtn: null,
-  viewModeToggleBtn: null
+  chatMessages: null
 };
 
 /**
@@ -55,21 +46,17 @@ const elements = {
 function init() {
   console.log('Polish content script initialized');
 
-  // Set up message listener FIRST so it's ready immediately
-  chrome.runtime.onMessage.addListener(handleMessage);
-
   // Create overlay element for highlighting
   createOverlay();
 
-  // Inject persistent overlay (async, but listener is already set up)
+  // Inject persistent overlay
   injectOverlay();
 
-  // Load API key (async)
+  // Load API key
   loadApiKey();
 
-  // Add scroll/resize listeners to keep selected element highlighted
-  window.addEventListener('scroll', updateSelectedElementHighlight, true);
-  window.addEventListener('resize', updateSelectedElementHighlight);
+  // Listen for messages from popup/background
+  chrome.runtime.onMessage.addListener(handleMessage);
 }
 
 /**
@@ -99,36 +86,19 @@ function createOverlayManually() {
       <div class="polish-top-bar-left">
         <button id="polish-close-btn" class="polish-btn polish-btn-text" title="Close">Close</button>
         <button id="polish-settings-btn" class="polish-btn polish-btn-icon" title="Settings">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M13.657 8.685a1.5 1.5 0 00.3 1.655l.05.05a1.816 1.816 0 01-.517 2.975 1.816 1.816 0 01-2.975.517l-.05-.05a1.5 1.5 0 00-1.656-.3 1.5 1.5 0 00-.9 1.373v.143a1.816 1.816 0 01-3.632 0v-.071a1.5 1.5 0 00-.981-1.373 1.5 1.5 0 00-1.655.3l-.05.05a1.816 1.816 0 01-2.975-.517 1.816 1.816 0 01.517-2.975l.05-.05a1.5 1.5 0 00.3-1.655 1.5 1.5 0 00-1.373-.9h-.143a1.816 1.816 0 010-3.632h.071a1.5 1.5 0 001.373-.981 1.5 1.5 0 001.655-.3l.05-.05a1.816 1.816 0 012.975.517l.05.05a1.5 1.5 0 001.655.3h.072a1.5 1.5 0 00.9-1.373v-.143a1.816 1.816 0 013.632 0v.071a1.5 1.5 0 00.9 1.373 1.5 1.5 0 001.656.3l.05-.05a1.816 1.816 0 012.975-.517 1.816 1.816 0 01.517 2.975l-.05.05a1.5 1.5 0 00-.3 1.655v.072a1.5 1.5 0 001.373.9h.143a1.816 1.816 0 010 3.632h-.071a1.5 1.5 0 00-1.373.981z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.5"/></svg>
         </button>
       </div>
       <div class="polish-top-bar-center">
         <button id="polish-back-btn" class="polish-btn polish-btn-icon" title="Back">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.5"/></svg>
         </button>
         <button id="polish-forward-btn" class="polish-btn polish-btn-icon" title="Forward">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5"/></svg>
         </button>
         <select id="polish-context-selector" class="polish-context-selector">
           <option>bloomreach-ai-boost</option>
         </select>
-        <button id="polish-view-mode-toggle" class="polish-btn polish-btn-icon" title="Toggle Phone/Desktop View">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- Desktop icon (larger horizontal) -->
-            <rect x="2" y="4" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
-            <line x1="3" y1="6" x2="9" y2="6" stroke="currentColor" stroke-width="1"/>
-            <!-- Phone icon (smaller vertical, overlapping) -->
-            <rect x="8" y="6" width="6" height="8" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
-            <line x1="9.5" y1="8" x2="12.5" y2="8" stroke="currentColor" stroke-width="0.5"/>
-          </svg>
-        </button>
       </div>
       <div class="polish-top-bar-right">
         <button id="polish-discard-btn" class="polish-btn polish-btn-text polish-btn-danger">Discard</button>
@@ -138,43 +108,43 @@ function createOverlayManually() {
     </div>
     <div id="polish-container" class="polish-container">
       <div id="polish-chat-panel" class="polish-chat-panel">
+        <div class="polish-chat-header"><h2>Polish</h2></div>
         <div id="polish-chat-messages" class="polish-chat-messages"></div>
         <div class="polish-chat-input-area">
-          <div id="polish-selected-element-info" class="polish-selected-element-info hidden">
-            <span>Selected element: &lt;<span id="polish-selected-element-tag"></span>&gt;</span>
-            <button id="polish-deselect-element-btn" class="polish-deselect-btn" title="Deselect element">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
-            </button>
-          </div>
           <div class="polish-mode-buttons">
-            <button id="polish-edit-btn" class="polish-mode-btn polish-mode-btn-active" title="Edit Mode">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M11.333 2a1.414 1.414 0 012 2L6 11.333l-3.333 1L4 9l7.333-7.333z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Edit
-            </button>
-            <button id="polish-chat-btn" class="polish-mode-btn" title="Chat Mode">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M5.333 12H4a2 2 0 01-2-2V4a2 2 0 012-2h8a2 2 0 012 2v1.333" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M6 10l5.333-5.333a1.414 1.414 0 012 2L8 12l-2 1 1-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Chat
-            </button>
+            <button id="polish-edit-btn" class="polish-mode-btn polish-mode-btn-active">Edit</button>
+            <button id="polish-chat-btn" class="polish-mode-btn">Chat</button>
           </div>
           <div class="polish-input-wrapper">
             <textarea id="polish-modification-input" class="polish-modification-input" placeholder="Ask Polish..." rows="1"></textarea>
             <button id="polish-send-btn" class="polish-send-btn" title="Send">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M14 2L7 9M14 2l-5 12-2-5-5-2 12-5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-5 12-2-5-5-2 12-5z" stroke="currentColor" stroke-width="1.5"/></svg>
             </button>
           </div>
           <div class="polish-share-feedback">
-            <a href="https://forms.gle/5pX4CB1u2VVsCi1n7" target="_blank" id="polish-share-feedback-link" class="polish-link">Share Feedback</a>
+            <a href="#" id="polish-share-feedback-link" class="polish-link">Share Feedback</a>
           </div>
         </div>
+        <div id="polish-api-key-section" class="polish-api-key-section hidden">
+          <h3>API Key Setup</h3>
+          <p class="polish-help-text">Enter your Anthropic API key to get started:</p>
+          <div class="polish-input-group">
+            <input type="password" id="polish-api-key-input" class="polish-input" placeholder="sk-ant-..." autocomplete="off" />
+            <button id="polish-save-api-key-btn" class="polish-btn polish-btn-primary">Save</button>
+          </div>
+          <div id="polish-api-key-status" class="polish-status hidden"></div>
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" class="polish-link">Get your API key from Anthropic →</a>
+        </div>
+        <div id="polish-selected-element-info" class="polish-selected-element-info hidden">
+          <div class="polish-info-box">
+            <p class="polish-info-label">Selected element:</p>
+            <p class="polish-info-value">
+              &lt;<span id="polish-selected-element-tag"></span>&gt;<br>
+              <span id="polish-selected-element-selector"></span>
+            </p>
+          </div>
+        </div>
+        <div id="polish-modification-status" class="polish-status hidden"></div>
       </div>
       <div id="polish-content-area" class="polish-content-area"></div>
     </div>
@@ -211,20 +181,9 @@ function cacheOverlayElements() {
   elements.apiKeyStatus = document.getElementById('polish-api-key-status');
   elements.selectedElementInfo = document.getElementById('polish-selected-element-info');
   elements.selectedElementTag = document.getElementById('polish-selected-element-tag');
-  elements.deselectElementBtn = document.getElementById('polish-deselect-element-btn');
+  elements.selectedElementSelector = document.getElementById('polish-selected-element-selector');
+  elements.modificationStatus = document.getElementById('polish-modification-status');
   elements.chatMessages = document.getElementById('polish-chat-messages');
-  elements.viewModeToggleBtn = document.getElementById('polish-view-mode-toggle');
-  
-  // Create floating API key overlay (not in HTML, created dynamically)
-  createFloatingApiKeyOverlay();
-  
-  // Create floating notification system (not in HTML, created dynamically)
-  createFloatingNotification();
-  
-  // Initialize view mode button state
-  if (elements.viewModeToggleBtn) {
-    updateViewModeButton();
-  }
 }
 
 /**
@@ -244,7 +203,12 @@ function setupOverlayEventListeners() {
     });
   }
 
-  // Share Feedback link opens the form in a new tab - no handler needed as it's a regular link
+  if (elements.shareFeedbackLink) {
+    elements.shareFeedbackLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Share Feedback clicked (placeholder)');
+    });
+  }
 
   if (elements.discardBtn) {
     elements.discardBtn.addEventListener('click', (e) => {
@@ -289,22 +253,12 @@ function setupOverlayEventListeners() {
   if (elements.chatBtn) {
     elements.chatBtn.addEventListener('click', handleChatMode);
   }
-  
-  // Deselect element button
-  if (elements.deselectElementBtn) {
-    elements.deselectElementBtn.addEventListener('click', handleDeselectElement);
-  }
-
-  // View mode toggle button (Phone/Desktop)
-  if (elements.viewModeToggleBtn) {
-    elements.viewModeToggleBtn.addEventListener('click', handleToggleViewMode);
-  }
 
   if (elements.sendBtn) {
     elements.sendBtn.addEventListener('click', handleSend);
   }
 
-  // API Key (legacy - kept for compatibility, but floating overlay is primary)
+  // API Key
   if (elements.saveApiKeyBtn) {
     elements.saveApiKeyBtn.addEventListener('click', handleSaveApiKey);
   }
@@ -312,12 +266,9 @@ function setupOverlayEventListeners() {
   // Keyboard shortcuts
   if (elements.modificationInput) {
     elements.modificationInput.addEventListener('keydown', (e) => {
-      // Allow Enter to submit (with Ctrl/Cmd) or just Enter if element is selected
-      if (e.key === 'Enter') {
-        if (e.ctrlKey || e.metaKey || selectedElement) {
-          e.preventDefault();
-          handleSend();
-        }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        handleSend();
       }
     });
 
@@ -344,12 +295,7 @@ function showOverlayUI() {
   
   isOverlayVisible = true;
   elements.overlayWrapper.classList.add('active');
-  document.documentElement.classList.add('polish-overlay-active');
   document.body.classList.add('polish-overlay-active');
-  
-  // Apply current view mode
-  applyViewMode();
-  updateViewModeButton();
   
   // Check if API key exists, show appropriate UI
   if (!apiKey) {
@@ -368,11 +314,7 @@ function hideOverlayUI() {
   
   isOverlayVisible = false;
   elements.overlayWrapper.classList.remove('active');
-  document.documentElement.classList.remove('polish-overlay-active');
   document.body.classList.remove('polish-overlay-active');
-  
-  // Remove phone mode wrapper if active
-  removePhoneModeWrapper();
   
   // Disable selection mode when hiding
   if (isSelectionMode) {
@@ -399,71 +341,31 @@ function handleClose() {
 }
 
 /**
- * Handle Edit mode button - toggle mode
+ * Handle Edit mode button
  */
 function handleEditMode() {
-  // If already active, deselect it
-  if (currentMode === 'edit') {
-    currentMode = null;
-    elements.editBtn.classList.remove('polish-mode-btn-active');
-    
-    // Deselect element if selected
-    if (selectedElement) {
-      selectedElement = null;
-      hideOverlay();
-      updateElementInfo(null, null);
-    }
-    
-    // Disable selection mode
-    if (isSelectionMode) {
-      toggleSelectionMode();
-    }
-    
-    updateUIForState();
-    return;
-  }
+  if (currentMode === 'edit') return; // Already in edit mode
   
-  // Activate edit mode
   currentMode = 'edit';
   elements.editBtn.classList.add('polish-mode-btn-active');
   elements.chatBtn.classList.remove('polish-mode-btn-active');
   
-  // If no element is selected, enable selection mode
-  if (!selectedElement) {
-    if (!isSelectionMode) {
-      toggleSelectionMode();
-    }
-  }
-  
-  // Update UI
+  // Enable element selection if needed
   if (apiKey) {
+    // Selection will be enabled when user clicks to select
     updateUIForState();
   }
 }
 
 /**
- * Handle Chat mode button - toggle mode (placeholder - not fully implemented)
+ * Handle Chat mode button (placeholder - not fully implemented)
  */
 function handleChatMode() {
-  // If already active, deselect it
-  if (currentMode === 'chat') {
-    currentMode = null;
-    elements.chatBtn.classList.remove('polish-mode-btn-active');
-    updateUIForState();
-    return;
-  }
+  if (currentMode === 'chat') return; // Already in chat mode
   
-  // Activate chat mode
   currentMode = 'chat';
   elements.chatBtn.classList.add('polish-mode-btn-active');
   elements.editBtn.classList.remove('polish-mode-btn-active');
-  
-  // Deselect element if selected
-  if (selectedElement) {
-    selectedElement = null;
-    hideOverlay();
-    updateElementInfo(null, null);
-  }
   
   // Disable selection mode if active
   if (isSelectionMode) {
@@ -471,119 +373,6 @@ function handleChatMode() {
   }
   
   console.log('Chat mode activated (not fully implemented yet)');
-  updateUIForState();
-}
-
-/**
- * Handle deselect element button
- */
-function handleDeselectElement() {
-  selectedElement = null;
-  hideOverlay();
-  updateElementInfo(null, null);
-  
-  // Exit edit mode
-  currentMode = null;
-  elements.editBtn.classList.remove('polish-mode-btn-active');
-  
-  // Disable selection mode
-  if (isSelectionMode) {
-    toggleSelectionMode();
-  }
-  
-  updateUIForState();
-}
-
-/**
- * Handle view mode toggle (Phone/Desktop)
- */
-function handleToggleViewMode() {
-  viewMode = viewMode === 'desktop' ? 'phone' : 'desktop';
-  applyViewMode();
-  updateViewModeButton();
-}
-
-/**
- * Apply current view mode to the website preview
- */
-function applyViewMode() {
-  if (!document.body.classList.contains('polish-overlay-active')) {
-    return; // Only apply when overlay is active
-  }
-
-  if (viewMode === 'phone') {
-    document.body.classList.add('polish-phone-mode');
-    document.body.classList.remove('polish-desktop-mode');
-    createPhoneModeWrapper();
-  } else {
-    document.body.classList.add('polish-desktop-mode');
-    document.body.classList.remove('polish-phone-mode');
-    removePhoneModeWrapper();
-  }
-}
-
-/**
- * Create wrapper div for phone mode to constrain website content
- */
-function createPhoneModeWrapper() {
-  if (phoneModeWrapper) return; // Already exists
-  
-  // Create wrapper div
-  phoneModeWrapper = document.createElement('div');
-  phoneModeWrapper.id = 'polish-phone-wrapper';
-  phoneModeWrapper.setAttribute('data-polish-extension', 'true');
-  phoneModeWrapper.style.cssText = `
-    width: 375px;
-    max-width: 375px;
-    margin: 0;
-    position: relative;
-    background: inherit;
-    min-height: 100%;
-  `;
-  
-  // Move all body children into wrapper (except our extension elements)
-  const children = Array.from(document.body.children).filter(child => 
-    !child.hasAttribute('data-polish-extension') && child.id !== 'polish-overlay-wrapper'
-  );
-  
-  children.forEach(child => {
-    phoneModeWrapper.appendChild(child);
-  });
-  
-  // Insert wrapper as first child of body
-  document.body.insertBefore(phoneModeWrapper, document.body.firstChild);
-}
-
-/**
- * Remove phone mode wrapper and restore original structure
- */
-function removePhoneModeWrapper() {
-  if (!phoneModeWrapper) return;
-  
-  // Move all wrapper children back to body
-  const children = Array.from(phoneModeWrapper.children);
-  children.forEach(child => {
-    document.body.insertBefore(child, phoneModeWrapper);
-  });
-  
-  // Remove wrapper
-  phoneModeWrapper.remove();
-  phoneModeWrapper = null;
-}
-
-/**
- * Update view mode button visual state
- */
-function updateViewModeButton() {
-  if (!elements.viewModeToggleBtn) return;
-  
-  if (viewMode === 'phone') {
-    elements.viewModeToggleBtn.classList.add('polish-view-mode-active');
-    elements.viewModeToggleBtn.title = 'Switch to Desktop View';
-  } else {
-    elements.viewModeToggleBtn.classList.remove('polish-view-mode-active');
-    elements.viewModeToggleBtn.title = 'Switch to Phone View';
-  }
 }
 
 /**
@@ -608,10 +397,10 @@ async function loadApiKey() {
  * Handle save API key
  */
 async function handleSaveApiKey() {
-  const apiKeyValue = (elements.floatingApiKeyInput || elements.apiKeyInput)?.value.trim();
+  const apiKeyValue = elements.apiKeyInput.value.trim();
   
   if (!apiKeyValue || apiKeyValue.length < 20 || !apiKeyValue.startsWith('sk-ant-')) {
-    showFloatingApiKeyStatus('Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.', 'error');
+    showApiKeyStatus('Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.', 'error');
     return;
   }
 
@@ -627,8 +416,7 @@ async function handleSaveApiKey() {
     });
 
     apiKey = apiKeyValue;
-    showFloatingApiKeyStatus('API key saved successfully!', 'success');
-    showNotification('API key saved successfully!', 'success');
+    showApiKeyStatus('API key saved successfully!', 'success');
     
     setTimeout(() => {
       hideApiKeySection();
@@ -636,33 +424,16 @@ async function handleSaveApiKey() {
     }, 1000);
   } catch (error) {
     console.error('Failed to save API key:', error);
-    showFloatingApiKeyStatus('Failed to save API key. Please try again.', 'error');
+    showApiKeyStatus('Failed to save API key. Please try again.', 'error');
   }
 }
 
 /**
- * Show floating API key status
- */
-function showFloatingApiKeyStatus(message, type) {
-  if (!elements.floatingApiKeyStatus) return;
-  
-  elements.floatingApiKeyStatus.textContent = message;
-  elements.floatingApiKeyStatus.className = `polish-status status-${type}`;
-  elements.floatingApiKeyStatus.classList.remove('hidden');
-  
-  if (type === 'success') {
-    setTimeout(() => {
-      elements.floatingApiKeyStatus.classList.add('hidden');
-    }, 3000);
-  }
-}
-
-/**
- * Show API key section (floating overlay)
+ * Show API key section
  */
 function showApiKeySection() {
-  if (elements.floatingApiKeyOverlay) {
-    elements.floatingApiKeyOverlay.classList.remove('hidden');
+  if (elements.apiKeySection) {
+    elements.apiKeySection.classList.remove('hidden');
   }
   if (elements.modificationInput) {
     elements.modificationInput.disabled = true;
@@ -676,8 +447,8 @@ function showApiKeySection() {
  * Hide API key section
  */
 function hideApiKeySection() {
-  if (elements.floatingApiKeyOverlay) {
-    elements.floatingApiKeyOverlay.classList.add('hidden');
+  if (elements.apiKeySection) {
+    elements.apiKeySection.classList.add('hidden');
   }
 }
 
@@ -716,18 +487,8 @@ async function handleSend() {
 
   // If in edit mode and no element selected, enable selection mode
   if (currentMode === 'edit' && !selectedElement) {
-    if (!isSelectionMode) {
-      toggleSelectionMode();
-    }
-    showModificationStatus('Selection mode enabled - Click an element on the page to select it.', 'loading');
-    elements.modificationInput.placeholder = 'Select a web element...';
-    elements.modificationInput.disabled = true;
-    return;
-  }
-
-  // In edit mode, require element selection
-  if (currentMode === 'edit' && !selectedElement) {
-    showModificationStatus('Please select an element first by clicking on it.', 'error');
+    toggleSelectionMode();
+    showModificationStatus('Please select an element first.', 'error');
     return;
   }
 
@@ -744,7 +505,7 @@ async function handleSend() {
       showModificationStatus('Modifications applied successfully!', 'success');
       elements.modificationInput.value = '';
       
-      // Clear selection after successful modification
+      // Clear selection
       selectedElement = null;
       hideOverlay();
       updateElementInfo(null, null);
@@ -752,20 +513,14 @@ async function handleSend() {
       setTimeout(() => {
         showModificationStatus('', '');
         elements.modificationStatus.classList.add('hidden');
-        updateUIForState();
       }, 3000);
     } else {
       throw new Error(response?.error || 'Modification failed');
     }
   } catch (error) {
     console.error('Send failed:', error);
-    // Extract meaningful error message
-    let errorMessage = error.message || 'Failed to process request';
-    if (errorMessage.includes('CORS')) {
-      errorMessage = 'API Error: Please check your API key and permissions';
-    }
-    showModificationStatus(errorMessage, 'error');
-    // Re-enable input on error, keep selection if it exists
+    showModificationStatus(error.message || 'Failed to process request', 'error');
+  } finally {
     elements.modificationInput.disabled = false;
     elements.sendBtn.disabled = false;
     updateUIForState();
@@ -813,55 +568,46 @@ function updateUIForState() {
   hideApiKeySection();
 
   if (selectedElement) {
-    // Element is selected - show info and enable input
     elements.selectedElementInfo.classList.remove('hidden');
     elements.modificationInput.disabled = false;
     elements.sendBtn.disabled = false;
-    elements.modificationInput.placeholder = 'Ask Polish...';
-    // Keep the selected element highlighted
-    highlightElement(selectedElement, true);
   } else {
-    // No element selected
     elements.selectedElementInfo.classList.add('hidden');
     if (currentMode === 'edit') {
-      // In edit mode but no selection - user needs to select first
       elements.modificationInput.disabled = true;
-      elements.modificationInput.placeholder = 'Select a web element...';
-      elements.sendBtn.disabled = false; // Can click send to enable selection mode
+      elements.sendBtn.disabled = false; // Can still send to enable selection
     } else {
-      // In chat mode - allow free text
       elements.modificationInput.disabled = false;
-      elements.modificationInput.placeholder = 'Ask Polish...';
       elements.sendBtn.disabled = false;
     }
   }
 }
 
 /**
- * Show modification status (using floating notification)
+ * Show modification status
  */
 function showModificationStatus(message, type) {
+  if (!elements.modificationStatus) return;
+  
   if (!message) {
-    hideNotification();
+    elements.modificationStatus.classList.add('hidden');
     return;
   }
   
-  showNotification(message, type);
+  elements.modificationStatus.textContent = message;
+  elements.modificationStatus.className = `polish-status status-${type}`;
+  elements.modificationStatus.classList.remove('hidden');
 }
 
 /**
- * Update element info display (only show element type)
+ * Update element info display
  */
 function updateElementInfo(tagName, selector) {
   if (elements.selectedElementTag) {
     elements.selectedElementTag.textContent = tagName || '';
   }
-  
-  // Show/hide selected element info bar
-  if (tagName && elements.selectedElementInfo) {
-    elements.selectedElementInfo.classList.remove('hidden');
-  } else if (elements.selectedElementInfo) {
-    elements.selectedElementInfo.classList.add('hidden');
+  if (elements.selectedElementSelector) {
+    elements.selectedElementSelector.textContent = selector || '';
   }
 }
 
@@ -946,12 +692,7 @@ function disableSelectionMode() {
   document.removeEventListener('click', handleClick, true);
 
   document.body.style.cursor = '';
-  
-  // Don't hide overlay if we have a selected element - keep it highlighted
-  if (!selectedElement) {
-    hideOverlay();
-  }
-  
+  hideOverlay();
   currentlyHighlightedElement = null;
 }
 
@@ -1002,9 +743,7 @@ function handleClick(event) {
 
   const element = event.target;
 
-  // Don't select overlay elements
-  if (element.hasAttribute('data-polish-extension') || 
-      element.closest('#polish-overlay-wrapper')) {
+  if (element.hasAttribute('data-polish-extension')) {
     return;
   }
 
@@ -1016,14 +755,8 @@ function handleClick(event) {
   selectedElement = element;
   console.log('Element selected:', element);
 
-  // Keep the element highlighted (selected state)
   highlightElement(element, true);
-
-  // Disable selection mode but keep the highlight
   disableSelectionMode();
-  
-  // Re-highlight to maintain the selected state
-  highlightElement(selectedElement, true);
 
   updateElementInfo(
     selectedElement.tagName.toLowerCase(),
@@ -1073,13 +806,9 @@ async function handleModificationRequest(data, sendResponse) {
           });
 
           showNotification('Modifications applied!', 'success');
-          // Clear selection after modification
           selectedElement = null;
           hideOverlay();
           updateElementInfo(null, null);
-          // Exit edit mode
-          currentMode = null;
-          elements.editBtn.classList.remove('polish-mode-btn-active');
           updateUIForState();
 
           sendResponse({
@@ -1195,29 +924,17 @@ function highlightElement(element, isSelected = false) {
   const rect = element.getBoundingClientRect();
 
   overlayElement.style.display = 'block';
-  overlayElement.style.position = 'fixed'; // Use fixed positioning for better accuracy
-  overlayElement.style.top = `${rect.top}px`; // getBoundingClientRect() already gives viewport coordinates
-  overlayElement.style.left = `${rect.left}px`;
+  overlayElement.style.top = `${rect.top + window.scrollY}px`;
+  overlayElement.style.left = `${rect.left + window.scrollX}px`;
   overlayElement.style.width = `${rect.width}px`;
   overlayElement.style.height = `${rect.height}px`;
-  overlayElement.style.zIndex = '2147483646'; // Just below overlay wrapper
-  overlayElement.style.pointerEvents = 'none'; // Allow clicks through highlight
 
   if (isSelected) {
     overlayElement.style.border = '3px solid #10b981';
-    overlayElement.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+    overlayElement.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
   } else {
     overlayElement.style.border = '2px solid #3b82f6';
     overlayElement.style.backgroundColor = 'rgba(59, 130, 246, 0.1)';
-  }
-}
-
-/**
- * Update highlight position on scroll/resize (for selected elements)
- */
-function updateSelectedElementHighlight() {
-  if (selectedElement && overlayElement) {
-    highlightElement(selectedElement, true);
   }
 }
 
@@ -1249,102 +966,50 @@ function createOverlay() {
 }
 
 /**
- * Create floating API key overlay (centered on webpage preview)
- */
-function createFloatingApiKeyOverlay() {
-  if (document.getElementById('polish-floating-api-key-overlay')) return;
-  
-  const overlay = document.createElement('div');
-  overlay.id = 'polish-floating-api-key-overlay';
-  overlay.setAttribute('data-polish-extension', 'true');
-  overlay.className = 'polish-floating-api-key-overlay hidden';
-  
-  overlay.innerHTML = `
-    <div class="polish-floating-api-key-content">
-      <h3>API Key Setup</h3>
-      <p class="polish-help-text">Enter your Anthropic API key to get started:</p>
-      <div class="polish-input-group">
-        <input type="password" id="polish-floating-api-key-input" class="polish-input" placeholder="sk-ant-..." autocomplete="off" />
-        <button id="polish-floating-save-api-key-btn" class="polish-btn polish-btn-primary">Save</button>
-      </div>
-      <div id="polish-floating-api-key-status" class="polish-status hidden"></div>
-      <a href="https://console.anthropic.com/settings/keys" target="_blank" class="polish-link">Get your API key from Anthropic →</a>
-    </div>
-  `;
-  
-  document.body.appendChild(overlay);
-  
-  // Cache elements
-  elements.floatingApiKeyOverlay = overlay;
-  elements.floatingApiKeyInput = document.getElementById('polish-floating-api-key-input');
-  elements.floatingSaveApiKeyBtn = document.getElementById('polish-floating-save-api-key-btn');
-  elements.floatingApiKeyStatus = document.getElementById('polish-floating-api-key-status');
-  
-  // Set up event listeners
-  if (elements.floatingSaveApiKeyBtn) {
-    elements.floatingSaveApiKeyBtn.addEventListener('click', handleSaveApiKey);
-  }
-  if (elements.floatingApiKeyInput) {
-    elements.floatingApiKeyInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleSaveApiKey();
-      }
-    });
-  }
-}
-
-/**
- * Create floating notification system (top-center of webpage preview)
- */
-function createFloatingNotification() {
-  if (document.getElementById('polish-floating-notification')) return;
-  
-  const notification = document.createElement('div');
-  notification.id = 'polish-floating-notification';
-  notification.setAttribute('data-polish-extension', 'true');
-  notification.className = 'polish-floating-notification hidden';
-  
-  document.body.appendChild(notification);
-  elements.floatingNotification = notification;
-}
-
-/**
- * Show notification to user (using floating notification at top-center of webpage preview)
+ * Show notification to user
  */
 function showNotification(message, type = 'info') {
-  if (!elements.floatingNotification) {
-    createFloatingNotification();
+  const existing = document.querySelector('[data-polish-notification]');
+  if (existing) {
+    existing.remove();
   }
-  
-  const notification = elements.floatingNotification;
+
+  const notification = document.createElement('div');
+  notification.setAttribute('data-polish-notification', 'true');
+  notification.setAttribute('data-polish-extension', 'true');
+
   const bgColors = {
     info: '#3b82f6',
     success: '#10b981',
     error: '#ef4444',
-    loading: '#f59e0b',
-    warning: '#f59e0b'
+    loading: '#f59e0b'
   };
 
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: ${bgColors[type] || bgColors.info};
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 1000000;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    max-width: 300px;
+    animation: slideIn 0.3s ease-out;
+  `;
+
   notification.textContent = message;
-  notification.className = `polish-floating-notification polish-notification-${type}`;
-  notification.style.background = bgColors[type] || bgColors.info;
-  notification.classList.remove('hidden');
-  
-  // Auto-hide after 3 seconds (unless it's loading)
+  document.body.appendChild(notification);
+
   if (type !== 'loading') {
     setTimeout(() => {
-      notification.classList.add('hidden');
+      notification.style.animation = 'slideOut 0.3s ease-out';
+      setTimeout(() => notification.remove(), 300);
     }, 3000);
-  }
-}
-
-/**
- * Hide floating notification
- */
-function hideNotification() {
-  if (elements.floatingNotification) {
-    elements.floatingNotification.classList.add('hidden');
   }
 }
 

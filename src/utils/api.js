@@ -14,7 +14,7 @@ const API_VERSION = '2023-06-01';
  * @param {Object} elementContext - DOM element context (HTML, CSS, selector)
  * @returns {Promise<Object>} - Claude's response with modifications
  */
-export async function requestModification(apiKey, userRequest, elementContext) {
+async function requestModification(apiKey, userRequest, elementContext) {
   if (!apiKey) {
     throw new Error('API key is required');
   }
@@ -183,7 +183,7 @@ function parseClaudeResponse(responseText) {
  * @param {string} apiKey - API key to validate
  * @returns {boolean} - Whether key looks valid
  */
-export function validateApiKey(apiKey) {
+function validateApiKey(apiKey) {
   // Anthropic API keys start with 'sk-ant-'
   return typeof apiKey === 'string' && apiKey.startsWith('sk-ant-') && apiKey.length > 20;
 }

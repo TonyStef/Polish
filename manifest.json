@@ -23,7 +23,6 @@
     }
   ],
   "action": {
-    "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -37,7 +36,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/content/content.css"],
+      "resources": ["src/content/content.css", "src/content/overlay.html"],
       "matches": ["<all_urls>"]
     }
   ]
