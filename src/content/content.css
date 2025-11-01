@@ -229,25 +229,107 @@
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  scroll-behavior: smooth;
 }
 
+/* Empty State */
+.polish-chat-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #9ca3af;
+  font-size: 14px;
+  text-align: center;
+  padding: 24px;
+}
+
+.polish-chat-empty-state p {
+  margin: 0;
+}
+
+/* Chat Message Container */
 .polish-chat-message {
   padding: 12px;
   border-radius: 8px;
   font-size: 14px;
   line-height: 1.5;
   color: #374151;
+  animation: messageSlideIn 0.2s ease-out;
 }
 
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* User Message */
 .polish-chat-message.user {
   background: white;
   border: 1px solid #e5e7eb;
+  border-left: 3px solid #3b82f6;
 }
 
+/* Assistant Message */
 .polish-chat-message.assistant {
   background: #eff6ff;
   border: 1px solid #bfdbfe;
+  border-left: 3px solid #10b981;
+}
+
+/* Message Header (timestamp + mode badge) */
+.polish-message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Timestamp */
+.polish-message-time {
+  font-weight: 500;
+}
+
+/* Mode Badge (Edit/Chat) */
+.polish-message-mode {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Message Content */
+.polish-message-content {
+  font-size: 14px;
+  color: #111827;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Element Context Badge (for edit mode) */
+.polish-message-element {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: #f9fafb;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  color: #6b7280;
+  display: inline-block;
+  cursor: help;
+  border: 1px solid #e5e7eb;
 }
 
 /* Chat Input Area */
