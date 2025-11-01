@@ -73,7 +73,7 @@ const elements = {
 /**
  * Initialize the content script
  */
-function init() {
+async function init() {
   console.log('Polish content script initialized');
 
   // Don't initialize if we're inside the phone iframe (avoid duplicate overlays)
@@ -85,16 +85,17 @@ function init() {
   // Set up message listener FIRST so it's ready immediately
   chrome.runtime.onMessage.addListener(handleMessage);
 
-  // Create overlay element for highlighting
+  // Create overlay element for highlighting (but don't inject UI yet)
   createOverlay();
 
-  // Inject persistent overlay (async, but listener is already set up)
-  injectOverlay();
+  // Initialize versioning system and WAIT for it to complete
+  // This will load any saved projects BEFORE we show the UI
+  await initializeVersioning();
 
-  // Initialize versioning system
-  initializeVersioning();
+  // NOW inject persistent overlay (after projects are loaded)
+  await injectOverlay();
 
-  // Load API key (async)
+  // Load API key (async, can happen in parallel)
   loadApiKey();
 
   // Add scroll/resize listeners to keep selected element highlighted
@@ -291,8 +292,19 @@ async function initializeVersioning() {
   currentUrl = normalizeUrl(window.location.href);
   
   // Store initial HTML state (only once per page load)
+  // Clone and sanitize to exclude Polish UI elements
   if (!initialHTML) {
-    initialHTML = document.documentElement.outerHTML;
+    const clonedDoc = document.documentElement.cloneNode(true);
+
+    // Remove Polish extension elements from clone
+    clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+    const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+    if (overlayWrapper) {
+      overlayWrapper.remove();
+    }
+
+    // Capture clean HTML
+    initialHTML = clonedDoc.outerHTML;
   }
   
   // Ensure Live Website exists in storage
@@ -402,41 +414,85 @@ async function loadProjectsForUrl() {
 }
 
 /**
+ * Surgically replace body content while preserving Polish overlay
+ * This prevents destroying cached element references and event listeners
+ * @param {string} newBodyHTML - The new body HTML content to insert
+ */
+function replaceBodyContentPreservingOverlay(newBodyHTML) {
+  // Remove all body children EXCEPT Polish extension elements
+  Array.from(document.body.children)
+    .filter(child =>
+      !child.hasAttribute('data-polish-extension') &&
+      child.id !== 'polish-overlay-wrapper' &&
+      child.id !== 'polish-phone-wrapper'
+    )
+    .forEach(child => child.remove());
+
+  // Parse and insert new content
+  const temp = document.createElement('div');
+  temp.innerHTML = newBodyHTML;
+
+  // Insert new content BEFORE overlay wrapper (keeps overlay at end)
+  const overlayWrapper = document.getElementById('polish-overlay-wrapper');
+  Array.from(temp.children).forEach(child => {
+    if (overlayWrapper) {
+      document.body.insertBefore(child, overlayWrapper);
+    } else {
+      document.body.appendChild(child);
+    }
+  });
+}
+
+/**
  * Load project HTML state
  */
 function loadProjectHTML(project) {
   if (project && project.html) {
     try {
-      // Save current HTML before switching (if needed for future undo)
-      // Restore HTML state
-      document.documentElement.outerHTML = project.html;
-      
-      // Store the loaded HTML as the new "initial" state for this project
-      // (so discard works from this project's saved state)
-      // But keep the true initial HTML for the page
-      
+      console.log(`Loading project: ${project.name}`);
+
+      // Parse the saved HTML safely using DOMParser
+      const parser = new DOMParser();
+      const savedDoc = parser.parseFromString(project.html, 'text/html');
+
+      // Use surgical replacement to preserve Polish overlay
+      // This prevents destroying cached element references and event listeners
+      replaceBodyContentPreservingOverlay(savedDoc.body.innerHTML);
+
+      // Also update head if it has relevant content (like inline styles)
+      // But preserve critical elements like script tags
+      const savedHead = savedDoc.head;
+      if (savedHead) {
+        // Copy over style elements
+        const styleElements = savedHead.querySelectorAll('style:not([data-polish-extension])');
+        styleElements.forEach(style => {
+          // Check if this style already exists
+          const existingStyle = Array.from(document.head.querySelectorAll('style')).find(s =>
+            s.textContent === style.textContent
+          );
+          if (!existingStyle) {
+            document.head.appendChild(style.cloneNode(true));
+          }
+        });
+      }
+
       // Clear selection when switching projects
       selectedElement = null;
-      
-      // Re-initialize after HTML change
-      setTimeout(() => {
-        injectOverlay();
-        setupOverlayEventListeners();
-        
-        // Re-cache elements that might have been lost
-        cacheOverlayElements();
-        
-        // Clear any highlights
-        if (overlayElement) {
-          overlayElement.style.display = 'none';
-        }
-        
-        // Update UI
-        updateElementInfo(null, null);
-        updateUIForState();
-      }, 100);
+      currentlyHighlightedElement = null;
+
+      // Clear any highlights (overlay was preserved, so this still works)
+      if (overlayElement) {
+        overlayElement.style.display = 'none';
+      }
+
+      // Update UI immediately (no setTimeout needed since overlay was preserved)
+      updateElementInfo(null, null);
+      updateUIForState();
+
+      console.log('Project HTML loaded successfully');
     } catch (error) {
       console.error('Failed to load project HTML:', error);
+      showNotification('Failed to load project', 'error');
     }
   }
 }
@@ -2427,23 +2483,31 @@ async function switchToLiveWebsite() {
   
   // Load Live Website HTML
   const liveHTML = await getLiveWebsiteHTML();
-  if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
-    document.documentElement.outerHTML = liveHTML;
-    
-    // Re-initialize after HTML change
-    setTimeout(() => {
-      injectOverlay();
-      setupOverlayEventListeners();
-      cacheOverlayElements();
-      
+  if (liveHTML) {
+    try {
+      // Parse the HTML safely
+      const parser = new DOMParser();
+      const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+      // Use surgical replacement to preserve Polish overlay
+      replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+      // Clear selection
       selectedElement = null;
+      currentlyHighlightedElement = null;
+
+      // Clear highlights
       if (overlayElement) {
         overlayElement.style.display = 'none';
       }
-      
+
+      // Update UI immediately
       updateElementInfo(null, null);
       updateUIForState();
-    }, 100);
+    } catch (error) {
+      console.error('Failed to load live HTML:', error);
+      showNotification('Failed to switch to live website', 'error');
+    }
   }
   
   hideVersionsOverlay();
@@ -2651,22 +2715,30 @@ async function deleteProject(projectId) {
         
         // Load Live Website HTML
         getLiveWebsiteHTML().then(liveHTML => {
-          if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
-            document.documentElement.outerHTML = liveHTML;
-            
-            setTimeout(() => {
-              injectOverlay();
-              setupOverlayEventListeners();
-              cacheOverlayElements();
-              
+          if (liveHTML) {
+            try {
+              // Parse the HTML safely
+              const parser = new DOMParser();
+              const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+              // Use surgical replacement to preserve Polish overlay
+              replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+              // Clear selection
               selectedElement = null;
+              currentlyHighlightedElement = null;
+
+              // Clear highlights
               if (overlayElement) {
                 overlayElement.style.display = 'none';
               }
-              
+
+              // Update UI immediately
               updateElementInfo(null, null);
               updateUIForState();
-            }, 100);
+            } catch (error) {
+              console.error('Failed to load live HTML:', error);
+            }
           }
         });
         
@@ -2757,22 +2829,30 @@ async function createNewProjectFromLive() {
       isProjectSaved = true;
       
       // Load the Live Website HTML into the new project
-      if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
-        document.documentElement.outerHTML = liveHTML;
-        
-        setTimeout(() => {
-          injectOverlay();
-          setupOverlayEventListeners();
-          cacheOverlayElements();
-          
+      if (liveHTML) {
+        try {
+          // Parse the HTML safely
+          const parser = new DOMParser();
+          const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+          // Use surgical replacement to preserve Polish overlay
+          replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+          // Clear selection
           selectedElement = null;
+          currentlyHighlightedElement = null;
+
+          // Clear highlights
           if (overlayElement) {
             overlayElement.style.display = 'none';
           }
-          
+
+          // Update UI immediately
           updateElementInfo(null, null);
           updateUIForState();
-        }, 100);
+        } catch (error) {
+          console.error('Failed to load live HTML:', error);
+        }
       }
       
       updateProjectNameDisplay();
@@ -2871,8 +2951,19 @@ async function handleSaveProject() {
     showNotification('Live Website cannot be modified. Create a new project instead.', 'error');
     return;
   }
-  
-  const currentHTML = document.documentElement.outerHTML;
+
+  // Clone the document to avoid modifying the live DOM
+  const clonedDoc = document.documentElement.cloneNode(true);
+
+  // Remove Polish extension elements from clone (don't save our UI)
+  clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+  const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+  if (overlayWrapper) {
+    overlayWrapper.remove();
+  }
+
+  // Get clean HTML without Polish elements
+  const currentHTML = clonedDoc.outerHTML;
   
   // Generate project ID if needed
   if (!currentProjectId) {
@@ -2906,7 +2997,7 @@ async function handleSaveProject() {
     chrome.storage.local.set({ [storageKey]: projects }, () => {
       isProjectSaved = true;
       showNotification(`Project "${currentProjectName}" saved`, 'success');
-      console.log('Project saved');
+      console.log('Project saved successfully (without Polish elements)');
     });
   });
 }
@@ -2959,28 +3050,35 @@ function revertToHTML(html) {
     showNotification('No baseline state available', 'error');
     return;
   }
-  
-  // Revert to HTML
-  document.documentElement.outerHTML = html;
-  
-  // Reset project state (but keep name and ID)
-  isProjectSaved = false;
-  
-  // Re-initialize overlay
-  setTimeout(() => {
-    injectOverlay();
-    setupOverlayEventListeners();
-    cacheOverlayElements();
-    
+
+  try {
+    // Parse the HTML safely
+    const parser = new DOMParser();
+    const revertDoc = parser.parseFromString(html, 'text/html');
+
+    // Use surgical replacement to preserve Polish overlay
+    replaceBodyContentPreservingOverlay(revertDoc.body.innerHTML);
+
+    // Reset project state (but keep name and ID)
+    isProjectSaved = false;
+
+    // Clear selection
     selectedElement = null;
+    currentlyHighlightedElement = null;
+
+    // Clear highlights
     if (overlayElement) {
       overlayElement.style.display = 'none';
     }
-    
+
+    // Update UI immediately (no setTimeout needed)
     updateElementInfo(null, null);
     updateUIForState();
     showNotification('Changes discarded', 'success');
-  }, 100);
+  } catch (error) {
+    console.error('Failed to revert to HTML:', error);
+    showNotification('Failed to revert changes', 'error');
+  }
 }
 
 /**
