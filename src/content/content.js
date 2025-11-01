@@ -23,6 +23,10 @@ let initialHTML = null; // Initial HTML state for discard functionality
 let isProjectSaved = false; // Whether current project is saved
 let currentUrl = null; // Current website URL (normalized)
 
+// Live Website constants
+const LIVE_WEBSITE_ID = '_live_website_';
+const LIVE_WEBSITE_NAME = 'Live Website';
+
 // DOM elements cache
 const elements = {
   overlayWrapper: null,
@@ -68,23 +72,22 @@ const elements = {
 /**
  * Initialize the content script
  */
-async function init() {
+function init() {
   console.log('Polish content script initialized');
 
   // Set up message listener FIRST so it's ready immediately
   chrome.runtime.onMessage.addListener(handleMessage);
 
-  // Create overlay element for highlighting (but don't inject UI yet)
+  // Create overlay element for highlighting
   createOverlay();
 
-  // Initialize versioning system and WAIT for it to complete
-  // This will load any saved projects BEFORE we show the UI
-  await initializeVersioning();
-
-  // NOW inject persistent overlay (after projects are loaded)
+  // Inject persistent overlay (async, but listener is already set up)
   injectOverlay();
 
-  // Load API key (async, can happen in parallel)
+  // Initialize versioning system
+  initializeVersioning();
+
+  // Load API key (async)
   loadApiKey();
 
   // Add scroll/resize listeners to keep selected element highlighted
@@ -279,30 +282,69 @@ function normalizeUrl(url) {
 async function initializeVersioning() {
   // Normalize current URL
   currentUrl = normalizeUrl(window.location.href);
-
+  
   // Store initial HTML state (only once per page load)
-  // This is the clean page state WITHOUT Polish elements for Discard functionality
   if (!initialHTML) {
-    // Clone document to avoid modifying live DOM
-    const clonedDoc = document.documentElement.cloneNode(true);
-
-    // Remove any Polish extension elements that might already be present
-    clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
-    const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
-    if (overlayWrapper) {
-      overlayWrapper.remove();
-    }
-
-    // Store clean initial HTML
-    initialHTML = clonedDoc.outerHTML;
-    console.log('Initial HTML state captured (without Polish elements)');
+    initialHTML = document.documentElement.outerHTML;
   }
-
-  // Load projects for this URL and wait for completion
+  
+  // Ensure Live Website exists in storage
+  await ensureLiveWebsiteExists();
+  
+  // Load projects for this URL
   await loadProjectsForUrl();
-
+  
   // Update project name display
   updateProjectNameDisplay();
+}
+
+/**
+ * Ensure Live Website record exists in storage
+ */
+async function ensureLiveWebsiteExists() {
+  return new Promise((resolve) => {
+    const storageKey = `polish_live_website_${currentUrl}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      if (!result[storageKey]) {
+        // Create Live Website record
+        const liveWebsite = {
+          html: initialHTML,
+          savedAt: Date.now()
+        };
+        
+        chrome.storage.local.set({ [storageKey]: liveWebsite }, () => {
+          console.log('Live Website record created');
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Check if project ID is Live Website
+ */
+function isLiveWebsite(projectId) {
+  return projectId === LIVE_WEBSITE_ID;
+}
+
+/**
+ * Get Live Website HTML from storage
+ */
+async function getLiveWebsiteHTML() {
+  return new Promise((resolve) => {
+    const storageKey = `polish_live_website_${currentUrl}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      if (result[storageKey] && result[storageKey].html) {
+        resolve(result[storageKey].html);
+      } else {
+        // Fallback to initialHTML if storage doesn't have it yet
+        resolve(initialHTML);
+      }
+    });
+  });
 }
 
 /**
@@ -315,10 +357,12 @@ async function loadProjectsForUrl() {
       const projects = result[storageKey] || [];
       
       // If no projects exist, create default "new_project" (unsaved)
+      // Start from Live Website state
       if (projects.length === 0) {
         currentProjectId = null;
         currentProjectName = 'new_project';
         isProjectSaved = false;
+        // Don't load HTML - stay with initial state
       } else {
         // Load first project by default (or find active one)
         const firstProject = projects[0];
@@ -326,41 +370,27 @@ async function loadProjectsForUrl() {
         currentProjectName = firstProject.name;
         isProjectSaved = true;
         
-        // Load the project's HTML state
-        loadProjectHTML(firstProject);
+        // Only load HTML if it's not Live Website
+        if (!isLiveWebsite(firstProject.id)) {
+          loadProjectHTML(firstProject);
+        } else {
+          // Load Live Website HTML
+          getLiveWebsiteHTML().then(html => {
+            if (html && html !== document.documentElement.outerHTML) {
+              document.documentElement.outerHTML = html;
+              setTimeout(() => {
+                injectOverlay();
+                setupOverlayEventListeners();
+                cacheOverlayElements();
+                updateUIForState();
+              }, 100);
+            }
+          });
+        }
       }
       
       resolve();
     });
-  });
-}
-
-/**
- * Replace body content while preserving Polish overlay and extension elements
- * This prevents destroying the overlay wrapper and losing cached element references
- */
-function replaceBodyContentPreservingOverlay(newBodyHTML) {
-  // Remove all body children EXCEPT Polish extension elements
-  Array.from(document.body.children)
-    .filter(child =>
-      !child.hasAttribute('data-polish-extension') &&
-      child.id !== 'polish-overlay-wrapper' &&
-      child.id !== 'polish-phone-wrapper'
-    )
-    .forEach(child => child.remove());
-
-  // Parse and insert new content
-  const temp = document.createElement('div');
-  temp.innerHTML = newBodyHTML;
-
-  // Insert new content BEFORE overlay wrapper (keeps overlay at end of body)
-  const overlayWrapper = document.getElementById('polish-overlay-wrapper');
-  Array.from(temp.children).forEach(child => {
-    if (overlayWrapper) {
-      document.body.insertBefore(child, overlayWrapper);
-    } else {
-      document.body.appendChild(child);
-    }
   });
 }
 
@@ -370,50 +400,36 @@ function replaceBodyContentPreservingOverlay(newBodyHTML) {
 function loadProjectHTML(project) {
   if (project && project.html) {
     try {
-      console.log(`Loading project: ${project.name}`);
-
-      // Parse the saved HTML safely using DOMParser
-      const parser = new DOMParser();
-      const savedDoc = parser.parseFromString(project.html, 'text/html');
-
-      // Use surgical replacement to preserve Polish overlay
-      // This prevents destroying cached element references and event listeners
-      replaceBodyContentPreservingOverlay(savedDoc.body.innerHTML);
-
-      // Also update head if it has relevant content (like inline styles)
-      // But preserve critical elements like script tags
-      const savedHead = savedDoc.head;
-      if (savedHead) {
-        // Copy over style elements
-        const styleElements = savedHead.querySelectorAll('style:not([data-polish-extension])');
-        styleElements.forEach(style => {
-          // Check if this style already exists
-          const existingStyle = Array.from(document.head.querySelectorAll('style')).find(s =>
-            s.textContent === style.textContent
-          );
-          if (!existingStyle) {
-            document.head.appendChild(style.cloneNode(true));
-          }
-        });
-      }
-
+      // Save current HTML before switching (if needed for future undo)
+      // Restore HTML state
+      document.documentElement.outerHTML = project.html;
+      
+      // Store the loaded HTML as the new "initial" state for this project
+      // (so discard works from this project's saved state)
+      // But keep the true initial HTML for the page
+      
       // Clear selection when switching projects
       selectedElement = null;
-      currentlyHighlightedElement = null;
-
-      // Clear any highlights (overlay was preserved, so this still works)
-      if (overlayElement) {
-        overlayElement.style.display = 'none';
-      }
-
-      // Update UI immediately (no setTimeout needed since overlay was preserved)
-      updateElementInfo(null, null);
-      updateUIForState();
-
-      console.log('Project HTML loaded successfully');
+      
+      // Re-initialize after HTML change
+      setTimeout(() => {
+        injectOverlay();
+        setupOverlayEventListeners();
+        
+        // Re-cache elements that might have been lost
+        cacheOverlayElements();
+        
+        // Clear any highlights
+        if (overlayElement) {
+          overlayElement.style.display = 'none';
+        }
+        
+        // Update UI
+        updateElementInfo(null, null);
+        updateUIForState();
+      }, 100);
     } catch (error) {
       console.error('Failed to load project HTML:', error);
-      showNotification('Failed to load project', 'error');
     }
   }
 }
@@ -858,15 +874,44 @@ async function loadApiKey() {
  * Handle save API key
  */
 async function handleSaveApiKey() {
-  const apiKeyValue = (elements.settingsApiKeyInput || elements.floatingApiKeyInput || elements.apiKeyInput)?.value.trim();
-  const statusElement = elements.settingsApiKeyStatus || elements.floatingApiKeyStatus;
+  // Determine which input is being used based on which overlay is active
+  let apiKeyValue = null;
+  let useSettingsOverlay = false;
   
+  // Check if settings overlay is active first
+  if (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active') && elements.settingsApiKeyInput) {
+    apiKeyValue = elements.settingsApiKeyInput.value.trim();
+    useSettingsOverlay = true;
+  } else if (elements.floatingApiKeyOverlay && !elements.floatingApiKeyOverlay.classList.contains('hidden') && elements.floatingApiKeyInput) {
+    // Floating overlay is active
+    apiKeyValue = elements.floatingApiKeyInput.value.trim();
+    useSettingsOverlay = false;
+  } else if (elements.floatingApiKeyInput) {
+    // Fallback to floating input if it exists (initial screen)
+    apiKeyValue = elements.floatingApiKeyInput.value.trim();
+    useSettingsOverlay = false;
+  } else if (elements.apiKeyInput) {
+    // Legacy fallback
+    apiKeyValue = elements.apiKeyInput.value.trim();
+    useSettingsOverlay = false;
+  }
+  
+  // Check if API key value exists and is valid
   if (!apiKeyValue || apiKeyValue.length < 20 || !apiKeyValue.startsWith('sk-ant-')) {
-    const errorMsg = 'Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.';
-    if (statusElement) {
+    let errorMsg = 'Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.';
+    if (!apiKeyValue) {
+      errorMsg = 'Please enter an API key.';
+    }
+    
+    // Determine which overlay to use for error display
+    if (useSettingsOverlay || (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active'))) {
       showSettingsApiKeyStatus(errorMsg, 'error');
-    } else {
+    } else if (elements.floatingApiKeyOverlay && !elements.floatingApiKeyOverlay.classList.contains('hidden')) {
       showFloatingApiKeyStatus(errorMsg, 'error');
+    } else if (elements.floatingApiKeyStatus) {
+      showFloatingApiKeyStatus(errorMsg, 'error');
+    } else if (elements.settingsApiKeyStatus) {
+      showSettingsApiKeyStatus(errorMsg, 'error');
     }
     return;
   }
@@ -884,7 +929,8 @@ async function handleSaveApiKey() {
 
     apiKey = apiKeyValue;
     const successMsg = 'API key saved successfully!';
-    if (statusElement) {
+    
+    if (useSettingsOverlay) {
       showSettingsApiKeyStatus(successMsg, 'success');
     } else {
       showFloatingApiKeyStatus(successMsg, 'success');
@@ -892,18 +938,19 @@ async function handleSaveApiKey() {
     showNotification(successMsg, 'success');
     
     setTimeout(() => {
-      hideApiKeySection();
-      if (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active')) {
+      if (useSettingsOverlay) {
         // Keep settings open, just update UI
         updateUIForState();
       } else {
+        // Hide floating overlay and update UI
+        hideApiKeySection();
         updateUIForState();
       }
     }, 1000);
   } catch (error) {
     console.error('Failed to save API key:', error);
     const errorMsg = 'Failed to save API key. Please try again.';
-    if (statusElement) {
+    if (useSettingsOverlay) {
       showSettingsApiKeyStatus(errorMsg, 'error');
     } else {
       showFloatingApiKeyStatus(errorMsg, 'error');
@@ -1883,7 +1930,15 @@ function createVersionsOverlay() {
           />
         </div>
         <div class="polish-versions-list-container">
-          <div class="polish-versions-label" style="margin-bottom: 8px;">All Projects</div>
+          <div class="polish-versions-list-header">
+            <div class="polish-versions-label">All Projects</div>
+            <button id="polish-new-project-btn" class="polish-btn polish-btn-primary polish-btn-text" title="Create New Project">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              New Project
+            </button>
+          </div>
           <div id="polish-projects-list" class="polish-projects-list"></div>
         </div>
       </div>
@@ -1904,9 +1959,27 @@ function createVersionsOverlay() {
     });
   }
   
+  // New Project button
+  const newProjectBtn = document.getElementById('polish-new-project-btn');
+  if (newProjectBtn) {
+    newProjectBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      createNewProjectFromCurrent();
+    });
+  }
+  
   if (elements.projectNameInput) {
     elements.projectNameInput.addEventListener('change', (e) => {
       const newName = e.target.value.trim();
+      
+      // Don't allow renaming Live Website
+      if (isLiveWebsite(currentProjectId)) {
+        e.target.value = LIVE_WEBSITE_NAME;
+        showNotification('Live Website name cannot be changed', 'error');
+        return;
+      }
+      
       if (newName && newName !== currentProjectName) {
         currentProjectName = newName;
         updateProjectNameDisplay();
@@ -1955,6 +2028,14 @@ function showVersionsOverlay() {
   // Update current project name input
   if (elements.projectNameInput) {
     elements.projectNameInput.value = currentProjectName;
+    // Disable input if Live Website
+    if (isLiveWebsite(currentProjectId)) {
+      elements.projectNameInput.disabled = true;
+      elements.projectNameInput.style.cursor = 'not-allowed';
+    } else {
+      elements.projectNameInput.disabled = false;
+      elements.projectNameInput.style.cursor = 'text';
+    }
   }
   
   // Refresh projects list
@@ -1998,51 +2079,150 @@ async function refreshProjectsList() {
     
     elements.projectsList.innerHTML = '';
     
+    // Always show Live Website first
+    const liveWebsiteItem = createLiveWebsiteItem();
+    elements.projectsList.appendChild(liveWebsiteItem);
+    
     if (projects.length === 0) {
-      elements.projectsList.innerHTML = '<div class="polish-no-projects">No saved projects</div>';
+      const emptyState = document.createElement('div');
+      emptyState.className = 'polish-no-projects';
+      emptyState.textContent = 'No saved projects';
+      elements.projectsList.appendChild(emptyState);
       return;
     }
     
+    // Add regular projects
     projects.forEach(project => {
-      const item = document.createElement('div');
-      item.className = 'polish-project-item';
-      if (project.id === currentProjectId) {
-        item.classList.add('active');
-      }
-      
-      item.innerHTML = `
-        <span class="polish-project-item-name" data-project-id="${project.id}">${escapeHtml(project.name)}</span>
-        <button class="polish-project-item-menu" data-project-id="${project.id}" title="Options">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="8" cy="4" r="1" fill="currentColor"/>
-            <circle cx="8" cy="8" r="1" fill="currentColor"/>
-            <circle cx="8" cy="12" r="1" fill="currentColor"/>
-          </svg>
-        </button>
-      `;
-      
-      // Click handler to switch project
-      const nameSpan = item.querySelector('.polish-project-item-name');
-      nameSpan.addEventListener('click', () => {
-        switchToProject(project.id);
-      });
-      
-      // Menu button handler
-      const menuBtn = item.querySelector('.polish-project-item-menu');
-      menuBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        showDeleteOverlay(project.id, project.name, menuBtn);
-      });
-      
+      const item = createProjectItem(project);
       elements.projectsList.appendChild(item);
     });
   });
 }
 
 /**
+ * Create Live Website project item
+ */
+function createLiveWebsiteItem() {
+  const item = document.createElement('div');
+  item.className = 'polish-project-item polish-project-item-live';
+  if (currentProjectId === LIVE_WEBSITE_ID) {
+    item.classList.add('active');
+  }
+  
+  item.innerHTML = `
+    <div class="polish-project-item-content">
+      <span class="polish-project-item-name" data-project-id="${LIVE_WEBSITE_ID}">${LIVE_WEBSITE_NAME}</span>
+      <span class="polish-project-item-badge">Original</span>
+    </div>
+    <button class="polish-project-item-menu" data-project-id="${LIVE_WEBSITE_ID}" title="Options">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="8" cy="4" r="1" fill="currentColor"/>
+        <circle cx="8" cy="8" r="1" fill="currentColor"/>
+        <circle cx="8" cy="12" r="1" fill="currentColor"/>
+      </svg>
+    </button>
+  `;
+  
+  // Click handler to switch to Live Website
+  const nameSpan = item.querySelector('.polish-project-item-name');
+  nameSpan.addEventListener('click', () => {
+    switchToLiveWebsite();
+  });
+  
+  // Menu button handler - show duplicate only (no delete)
+  const menuBtn = item.querySelector('.polish-project-item-menu');
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showLiveWebsiteMenu(menuBtn);
+  });
+  
+  return item;
+}
+
+/**
+ * Create regular project item
+ */
+function createProjectItem(project) {
+  const item = document.createElement('div');
+  item.className = 'polish-project-item';
+  if (project.id === currentProjectId) {
+    item.classList.add('active');
+  }
+  
+  item.innerHTML = `
+    <div class="polish-project-item-content">
+      <span class="polish-project-item-name" data-project-id="${project.id}">${escapeHtml(project.name)}</span>
+    </div>
+    <button class="polish-project-item-menu" data-project-id="${project.id}" title="Options">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="8" cy="4" r="1" fill="currentColor"/>
+        <circle cx="8" cy="8" r="1" fill="currentColor"/>
+        <circle cx="8" cy="12" r="1" fill="currentColor"/>
+      </svg>
+    </button>
+  `;
+  
+  // Click handler to switch project
+  const nameSpan = item.querySelector('.polish-project-item-name');
+  nameSpan.addEventListener('click', () => {
+    switchToProject(project.id);
+  });
+  
+  // Menu button handler
+  const menuBtn = item.querySelector('.polish-project-item-menu');
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showProjectMenu(project.id, project.name, menuBtn);
+  });
+  
+  return item;
+}
+
+/**
+ * Switch to Live Website
+ */
+async function switchToLiveWebsite() {
+  currentProjectId = LIVE_WEBSITE_ID;
+  currentProjectName = LIVE_WEBSITE_NAME;
+  isProjectSaved = true;
+  
+  updateProjectNameDisplay();
+  
+  // Load Live Website HTML
+  const liveHTML = await getLiveWebsiteHTML();
+  if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
+    document.documentElement.outerHTML = liveHTML;
+    
+    // Re-initialize after HTML change
+    setTimeout(() => {
+      injectOverlay();
+      setupOverlayEventListeners();
+      cacheOverlayElements();
+      
+      selectedElement = null;
+      if (overlayElement) {
+        overlayElement.style.display = 'none';
+      }
+      
+      updateElementInfo(null, null);
+      updateUIForState();
+    }, 100);
+  }
+  
+  hideVersionsOverlay();
+  showNotification(`Switched to ${LIVE_WEBSITE_NAME}`, 'success');
+}
+
+/**
  * Switch to a different project
  */
 async function switchToProject(projectId) {
+  // Handle Live Website separately
+  if (isLiveWebsite(projectId)) {
+    await switchToLiveWebsite();
+    return;
+  }
+  
   const storageKey = `polish_projects_${currentUrl}`;
   chrome.storage.local.get([storageKey], (result) => {
     const projects = result[storageKey] || [];
@@ -2095,6 +2275,13 @@ function createDeleteOverlay() {
   
   overlay.innerHTML = `
     <div class="polish-delete-content">
+      <button class="polish-project-menu-item" id="polish-duplicate-project-btn" style="display: none;">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
+          <path d="M3 11V3C3 2.448 3.448 2 4 2h8" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        </svg>
+        Duplicate
+      </button>
       <button class="polish-delete-btn" id="polish-delete-project-btn">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M5.5 4V2.5C5.5 1.67 6.17 1 7 1h2c.83 0 1.5.67 1.5 1.5V4M7 7.5v4M9 7.5v4M3 4h10l-1 10H4L3 4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2110,8 +2297,17 @@ function createDeleteOverlay() {
   const deleteBtn = document.getElementById('polish-delete-project-btn');
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
-      if (deleteTargetProjectId) {
+      if (deleteTargetProjectId && !isLiveWebsite(deleteTargetProjectId)) {
         deleteProject(deleteTargetProjectId);
+      }
+    });
+  }
+  
+  const duplicateBtn = document.getElementById('polish-duplicate-project-btn');
+  if (duplicateBtn) {
+    duplicateBtn.addEventListener('click', () => {
+      if (deleteTargetProjectId) {
+        duplicateProject(deleteTargetProjectId);
       }
     });
   }
@@ -2120,9 +2316,9 @@ function createDeleteOverlay() {
 let deleteTargetProjectId = null;
 
 /**
- * Show delete overlay aligned to menu button
+ * Show project menu (delete/duplicate) aligned to menu button
  */
-function showDeleteOverlay(projectId, projectName, menuButton) {
+function showProjectMenu(projectId, projectName, menuButton) {
   if (!elements.deleteOverlay || !menuButton) return;
   
   const btnRect = menuButton.getBoundingClientRect();
@@ -2130,10 +2326,59 @@ function showDeleteOverlay(projectId, projectName, menuButton) {
   elements.deleteOverlay.style.top = `${btnRect.top}px`;
   elements.deleteOverlay.style.left = `${btnRect.right + 8}px`;
   
+  deleteTargetProjectId = projectId;
+  
+  // Show/hide buttons based on project type
   const deleteBtn = document.getElementById('polish-delete-project-btn');
-  if (deleteBtn) {
-    deleteBtn.setAttribute('data-project-id', projectId);
-    deleteTargetProjectId = projectId;
+  const duplicateBtn = document.getElementById('polish-duplicate-project-btn');
+  
+  // Show both delete and duplicate for regular projects
+  if (deleteBtn) deleteBtn.style.display = 'flex';
+  if (duplicateBtn) {
+    duplicateBtn.style.display = 'flex';
+    // Add click handler if not already added
+    if (!duplicateBtn.hasAttribute('data-listener-added')) {
+      duplicateBtn.setAttribute('data-listener-added', 'true');
+      duplicateBtn.addEventListener('click', () => {
+        if (deleteTargetProjectId) {
+          duplicateProject(deleteTargetProjectId);
+        }
+      });
+    }
+  }
+  
+  elements.deleteOverlay.classList.remove('hidden');
+}
+
+/**
+ * Show Live Website menu (only "Duplicate", no "Delete")
+ */
+function showLiveWebsiteMenu(menuButton) {
+  if (!elements.deleteOverlay || !menuButton) return;
+  
+  const btnRect = menuButton.getBoundingClientRect();
+  
+  elements.deleteOverlay.style.top = `${btnRect.top}px`;
+  elements.deleteOverlay.style.left = `${btnRect.right + 8}px`;
+  
+  deleteTargetProjectId = LIVE_WEBSITE_ID;
+  
+  // Show/hide buttons - only show duplicate, hide delete
+  const deleteBtn = document.getElementById('polish-delete-project-btn');
+  const duplicateBtn = document.getElementById('polish-duplicate-project-btn');
+  
+  if (deleteBtn) deleteBtn.style.display = 'none';
+  if (duplicateBtn) {
+    duplicateBtn.style.display = 'flex';
+    // Add click handler if not already added
+    if (!duplicateBtn.hasAttribute('data-listener-added')) {
+      duplicateBtn.setAttribute('data-listener-added', 'true');
+      duplicateBtn.addEventListener('click', () => {
+        if (deleteTargetProjectId) {
+          duplicateProject(deleteTargetProjectId);
+        }
+      });
+    }
   }
   
   elements.deleteOverlay.classList.remove('hidden');
@@ -2159,94 +2404,272 @@ async function deleteProject(projectId) {
     const filtered = projects.filter(p => p.id !== projectId);
     
     chrome.storage.local.set({ [storageKey]: filtered }, () => {
-      // If deleted project was current, switch to new_project
+      // If deleted project was current, switch to Live Website
       if (currentProjectId === projectId) {
-        currentProjectId = null;
-        currentProjectName = 'new_project';
-        isProjectSaved = false;
+        currentProjectId = LIVE_WEBSITE_ID;
+        currentProjectName = LIVE_WEBSITE_NAME;
+        isProjectSaved = true;
+        
         updateProjectNameDisplay();
-
-        // Revert to initial HTML
-        if (initialHTML) {
-          try {
-            // Parse the initial HTML safely
-            const parser = new DOMParser();
-            const initialDoc = parser.parseFromString(initialHTML, 'text/html');
-
-            // Use surgical replacement to preserve Polish overlay
-            replaceBodyContentPreservingOverlay(initialDoc.body.innerHTML);
-
-            // Clear selection
-            selectedElement = null;
-            currentlyHighlightedElement = null;
-
-            // Clear any highlights
-            if (overlayElement) {
-              overlayElement.style.display = 'none';
-            }
-
-            // Update UI immediately (no setTimeout needed)
-            updateElementInfo(null, null);
-            updateUIForState();
-          } catch (error) {
-            console.error('Failed to revert to initial HTML:', error);
+        
+        // Load Live Website HTML
+        getLiveWebsiteHTML().then(liveHTML => {
+          if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
+            document.documentElement.outerHTML = liveHTML;
+            
+            setTimeout(() => {
+              injectOverlay();
+              setupOverlayEventListeners();
+              cacheOverlayElements();
+              
+              selectedElement = null;
+              if (overlayElement) {
+                overlayElement.style.display = 'none';
+              }
+              
+              updateElementInfo(null, null);
+              updateUIForState();
+            }, 100);
           }
-        }
+        });
+        
+        hideVersionsOverlay();
+        showNotification('Project deleted. Switched to Live Website.', 'success');
+      } else {
+        showNotification('Project deleted', 'success');
       }
       
       refreshProjectsList();
       hideDeleteOverlay();
-      showNotification('Project deleted', 'success');
     });
   });
+}
+
+/**
+ * Create new project from current state
+ */
+async function createNewProjectFromCurrent() {
+  const currentHTML = document.documentElement.outerHTML;
+  
+  // Generate project ID and name
+  const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const projectName = generateProjectName();
+  
+  const project = {
+    id: projectId,
+    name: projectName,
+    html: currentHTML,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    isLive: false,
+    sourceProjectId: currentProjectId || null
+  };
+  
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    projects.push(project);
+    
+    chrome.storage.local.set({ [storageKey]: projects }, () => {
+      // Switch to new project
+      currentProjectId = projectId;
+      currentProjectName = projectName;
+      isProjectSaved = true;
+      
+      updateProjectNameDisplay();
+      
+      // Refresh project list
+      refreshProjectsList();
+      
+      hideVersionsOverlay();
+      showNotification(`Created new project: "${projectName}"`, 'success');
+      console.log('New project created from current state');
+    });
+  });
+}
+
+/**
+ * Create new project from Live Website
+ */
+async function createNewProjectFromLive() {
+  const liveHTML = await getLiveWebsiteHTML();
+  
+  // Generate project ID and name
+  const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const projectName = generateProjectName();
+  
+  const project = {
+    id: projectId,
+    name: projectName,
+    html: liveHTML,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    isLive: false,
+    sourceProjectId: LIVE_WEBSITE_ID
+  };
+  
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    projects.push(project);
+    
+    chrome.storage.local.set({ [storageKey]: projects }, () => {
+      // Switch to new project
+      currentProjectId = projectId;
+      currentProjectName = projectName;
+      isProjectSaved = true;
+      
+      // Load the Live Website HTML into the new project
+      if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
+        document.documentElement.outerHTML = liveHTML;
+        
+        setTimeout(() => {
+          injectOverlay();
+          setupOverlayEventListeners();
+          cacheOverlayElements();
+          
+          selectedElement = null;
+          if (overlayElement) {
+            overlayElement.style.display = 'none';
+          }
+          
+          updateElementInfo(null, null);
+          updateUIForState();
+        }, 100);
+      }
+      
+      updateProjectNameDisplay();
+      refreshProjectsList();
+      
+      hideVersionsOverlay();
+      showNotification(`Created new project from Live Website: "${projectName}"`, 'success');
+      console.log('New project created from Live Website');
+    });
+  });
+}
+
+/**
+ * Duplicate a project
+ */
+async function duplicateProject(sourceProjectId) {
+  const storageKey = `polish_projects_${currentUrl}`;
+  
+  chrome.storage.local.get([storageKey], async (result) => {
+    const projects = result[storageKey] || [];
+    let sourceProject = null;
+    
+    // Handle Live Website duplication
+    if (isLiveWebsite(sourceProjectId)) {
+      const liveHTML = await getLiveWebsiteHTML();
+      sourceProject = {
+        id: LIVE_WEBSITE_ID,
+        name: LIVE_WEBSITE_NAME,
+        html: liveHTML
+      };
+    } else {
+      sourceProject = projects.find(p => p.id === sourceProjectId);
+    }
+    
+    if (!sourceProject) {
+      showNotification('Project not found', 'error');
+      return;
+    }
+    
+    // Generate new project ID and name
+    const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const projectName = `Copy of ${sourceProject.name}`;
+    
+    const newProject = {
+      id: projectId,
+      name: projectName,
+      html: sourceProject.html,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      isLive: false,
+      sourceProjectId: sourceProjectId
+    };
+    
+    projects.push(newProject);
+    
+    chrome.storage.local.set({ [storageKey]: projects }, () => {
+      // Switch to duplicated project
+      currentProjectId = projectId;
+      currentProjectName = projectName;
+      isProjectSaved = true;
+      
+      // Load the duplicated HTML
+      loadProjectHTML(newProject);
+      
+      updateProjectNameDisplay();
+      refreshProjectsList();
+      
+      hideDeleteOverlay();
+      hideVersionsOverlay();
+      showNotification(`Duplicated project: "${projectName}"`, 'success');
+      console.log('Project duplicated');
+    });
+  });
+}
+
+/**
+ * Generate project name with timestamp
+ */
+function generateProjectName() {
+  const now = new Date();
+  const timeStr = now.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  return `Project ${timeStr}`;
 }
 
 /**
  * Handle Save button - save current state to project
  */
 async function handleSaveProject() {
-  // Clone the document to avoid modifying the live DOM
-  const clonedDoc = document.documentElement.cloneNode(true);
-
-  // Remove Polish extension elements from clone (don't save our UI)
-  clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
-  const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
-  if (overlayWrapper) {
-    overlayWrapper.remove();
+  // Don't allow saving Live Website
+  if (isLiveWebsite(currentProjectId)) {
+    showNotification('Live Website cannot be modified. Create a new project instead.', 'error');
+    return;
   }
-
-  // Get clean HTML without Polish elements
-  const currentHTML = clonedDoc.outerHTML;
-
+  
+  const currentHTML = document.documentElement.outerHTML;
+  
   // Generate project ID if needed
   if (!currentProjectId) {
     currentProjectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
-
+  
   const project = {
     id: currentProjectId,
     name: currentProjectName,
     html: currentHTML,
     createdAt: Date.now(),
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    isLive: false,
+    sourceProjectId: null
   };
-
+  
   const storageKey = `polish_projects_${currentUrl}`;
   chrome.storage.local.get([storageKey], (result) => {
     const projects = result[storageKey] || [];
-
+    
     // Update or add project
     const existingIndex = projects.findIndex(p => p.id === currentProjectId);
     if (existingIndex >= 0) {
+      project.createdAt = projects[existingIndex].createdAt; // Preserve original creation date
+      project.sourceProjectId = projects[existingIndex].sourceProjectId; // Preserve source
       projects[existingIndex] = project;
     } else {
       projects.push(project);
     }
-
+    
     chrome.storage.local.set({ [storageKey]: projects }, () => {
       isProjectSaved = true;
       showNotification(`Project "${currentProjectName}" saved`, 'success');
-      console.log('Project saved successfully (without Polish elements)');
+      console.log('Project saved');
     });
   });
 }
@@ -2254,41 +2677,73 @@ async function handleSaveProject() {
 /**
  * Handle Discard button - revert to initial state
  */
-function handleDiscard() {
-  if (!initialHTML) {
-    showNotification('No initial state available', 'error');
+async function handleDiscard() {
+  // If on Live Website, do nothing (already at baseline)
+  if (isLiveWebsite(currentProjectId)) {
+    showNotification('Already viewing Live Website', 'info');
     return;
   }
+  
+  // Get the baseline HTML for current project
+  let baselineHTML = null;
+  
+  if (currentProjectId && isProjectSaved) {
+    // Revert to saved project state
+    const storageKey = `polish_projects_${currentUrl}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      const projects = result[storageKey] || [];
+      const project = projects.find(p => p.id === currentProjectId);
+      
+      if (project && project.html) {
+        baselineHTML = project.html;
+      } else {
+        // Fallback to Live Website
+        getLiveWebsiteHTML().then(html => {
+          baselineHTML = html || initialHTML;
+          revertToHTML(baselineHTML);
+        });
+        return;
+      }
+      
+      revertToHTML(baselineHTML);
+    });
+  } else {
+    // No saved project, revert to Live Website
+    baselineHTML = await getLiveWebsiteHTML();
+    revertToHTML(baselineHTML || initialHTML);
+  }
+}
 
-  try {
-    // Parse the initial HTML safely
-    const parser = new DOMParser();
-    const initialDoc = parser.parseFromString(initialHTML, 'text/html');
-
-    // Use surgical replacement to preserve Polish overlay
-    replaceBodyContentPreservingOverlay(initialDoc.body.innerHTML);
-
-    // Reset project state (but keep name)
-    isProjectSaved = false;
-
-    // Clear selection
+/**
+ * Revert to a specific HTML state
+ */
+function revertToHTML(html) {
+  if (!html) {
+    showNotification('No baseline state available', 'error');
+    return;
+  }
+  
+  // Revert to HTML
+  document.documentElement.outerHTML = html;
+  
+  // Reset project state (but keep name and ID)
+  isProjectSaved = false;
+  
+  // Re-initialize overlay
+  setTimeout(() => {
+    injectOverlay();
+    setupOverlayEventListeners();
+    cacheOverlayElements();
+    
     selectedElement = null;
-    currentlyHighlightedElement = null;
-
-    // Clear any highlights
     if (overlayElement) {
       overlayElement.style.display = 'none';
     }
-
-    // Update UI immediately (no setTimeout needed)
+    
     updateElementInfo(null, null);
     updateUIForState();
-
     showNotification('Changes discarded', 'success');
-  } catch (error) {
-    console.error('Failed to discard changes:', error);
-    showNotification('Failed to discard changes', 'error');
-  }
+  }, 100);
 }
 
 /**
@@ -2671,4 +3126,5 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
 
