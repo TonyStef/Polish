@@ -68,22 +68,23 @@ const elements = {
 /**
  * Initialize the content script
  */
-function init() {
+async function init() {
   console.log('Polish content script initialized');
 
   // Set up message listener FIRST so it's ready immediately
   chrome.runtime.onMessage.addListener(handleMessage);
 
-  // Create overlay element for highlighting
+  // Create overlay element for highlighting (but don't inject UI yet)
   createOverlay();
 
-  // Inject persistent overlay (async, but listener is already set up)
+  // Initialize versioning system and WAIT for it to complete
+  // This will load any saved projects BEFORE we show the UI
+  await initializeVersioning();
+
+  // NOW inject persistent overlay (after projects are loaded)
   injectOverlay();
 
-  // Initialize versioning system
-  initializeVersioning();
-
-  // Load API key (async)
+  // Load API key (async, can happen in parallel)
   loadApiKey();
 
   // Add scroll/resize listeners to keep selected element highlighted
@@ -278,15 +279,28 @@ function normalizeUrl(url) {
 async function initializeVersioning() {
   // Normalize current URL
   currentUrl = normalizeUrl(window.location.href);
-  
+
   // Store initial HTML state (only once per page load)
+  // This is the clean page state WITHOUT Polish elements for Discard functionality
   if (!initialHTML) {
-    initialHTML = document.documentElement.outerHTML;
+    // Clone document to avoid modifying live DOM
+    const clonedDoc = document.documentElement.cloneNode(true);
+
+    // Remove any Polish extension elements that might already be present
+    clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+    const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+    if (overlayWrapper) {
+      overlayWrapper.remove();
+    }
+
+    // Store clean initial HTML
+    initialHTML = clonedDoc.outerHTML;
+    console.log('Initial HTML state captured (without Polish elements)');
   }
-  
-  // Load projects for this URL
+
+  // Load projects for this URL and wait for completion
   await loadProjectsForUrl();
-  
+
   // Update project name display
   updateProjectNameDisplay();
 }
@@ -322,41 +336,84 @@ async function loadProjectsForUrl() {
 }
 
 /**
+ * Replace body content while preserving Polish overlay and extension elements
+ * This prevents destroying the overlay wrapper and losing cached element references
+ */
+function replaceBodyContentPreservingOverlay(newBodyHTML) {
+  // Remove all body children EXCEPT Polish extension elements
+  Array.from(document.body.children)
+    .filter(child =>
+      !child.hasAttribute('data-polish-extension') &&
+      child.id !== 'polish-overlay-wrapper' &&
+      child.id !== 'polish-phone-wrapper'
+    )
+    .forEach(child => child.remove());
+
+  // Parse and insert new content
+  const temp = document.createElement('div');
+  temp.innerHTML = newBodyHTML;
+
+  // Insert new content BEFORE overlay wrapper (keeps overlay at end of body)
+  const overlayWrapper = document.getElementById('polish-overlay-wrapper');
+  Array.from(temp.children).forEach(child => {
+    if (overlayWrapper) {
+      document.body.insertBefore(child, overlayWrapper);
+    } else {
+      document.body.appendChild(child);
+    }
+  });
+}
+
+/**
  * Load project HTML state
  */
 function loadProjectHTML(project) {
   if (project && project.html) {
     try {
-      // Save current HTML before switching (if needed for future undo)
-      // Restore HTML state
-      document.documentElement.outerHTML = project.html;
-      
-      // Store the loaded HTML as the new "initial" state for this project
-      // (so discard works from this project's saved state)
-      // But keep the true initial HTML for the page
-      
+      console.log(`Loading project: ${project.name}`);
+
+      // Parse the saved HTML safely using DOMParser
+      const parser = new DOMParser();
+      const savedDoc = parser.parseFromString(project.html, 'text/html');
+
+      // Use surgical replacement to preserve Polish overlay
+      // This prevents destroying cached element references and event listeners
+      replaceBodyContentPreservingOverlay(savedDoc.body.innerHTML);
+
+      // Also update head if it has relevant content (like inline styles)
+      // But preserve critical elements like script tags
+      const savedHead = savedDoc.head;
+      if (savedHead) {
+        // Copy over style elements
+        const styleElements = savedHead.querySelectorAll('style:not([data-polish-extension])');
+        styleElements.forEach(style => {
+          // Check if this style already exists
+          const existingStyle = Array.from(document.head.querySelectorAll('style')).find(s =>
+            s.textContent === style.textContent
+          );
+          if (!existingStyle) {
+            document.head.appendChild(style.cloneNode(true));
+          }
+        });
+      }
+
       // Clear selection when switching projects
       selectedElement = null;
-      
-      // Re-initialize after HTML change
-      setTimeout(() => {
-        injectOverlay();
-        setupOverlayEventListeners();
-        
-        // Re-cache elements that might have been lost
-        cacheOverlayElements();
-        
-        // Clear any highlights
-        if (overlayElement) {
-          overlayElement.style.display = 'none';
-        }
-        
-        // Update UI
-        updateElementInfo(null, null);
-        updateUIForState();
-      }, 100);
+      currentlyHighlightedElement = null;
+
+      // Clear any highlights (overlay was preserved, so this still works)
+      if (overlayElement) {
+        overlayElement.style.display = 'none';
+      }
+
+      // Update UI immediately (no setTimeout needed since overlay was preserved)
+      updateElementInfo(null, null);
+      updateUIForState();
+
+      console.log('Project HTML loaded successfully');
     } catch (error) {
       console.error('Failed to load project HTML:', error);
+      showNotification('Failed to load project', 'error');
     }
   }
 }
@@ -2108,14 +2165,32 @@ async function deleteProject(projectId) {
         currentProjectName = 'new_project';
         isProjectSaved = false;
         updateProjectNameDisplay();
-        
+
         // Revert to initial HTML
         if (initialHTML) {
-          document.documentElement.outerHTML = initialHTML;
-          setTimeout(() => {
-            injectOverlay();
-            setupOverlayEventListeners();
-          }, 100);
+          try {
+            // Parse the initial HTML safely
+            const parser = new DOMParser();
+            const initialDoc = parser.parseFromString(initialHTML, 'text/html');
+
+            // Use surgical replacement to preserve Polish overlay
+            replaceBodyContentPreservingOverlay(initialDoc.body.innerHTML);
+
+            // Clear selection
+            selectedElement = null;
+            currentlyHighlightedElement = null;
+
+            // Clear any highlights
+            if (overlayElement) {
+              overlayElement.style.display = 'none';
+            }
+
+            // Update UI immediately (no setTimeout needed)
+            updateElementInfo(null, null);
+            updateUIForState();
+          } catch (error) {
+            console.error('Failed to revert to initial HTML:', error);
+          }
         }
       }
       
@@ -2130,13 +2205,24 @@ async function deleteProject(projectId) {
  * Handle Save button - save current state to project
  */
 async function handleSaveProject() {
-  const currentHTML = document.documentElement.outerHTML;
-  
+  // Clone the document to avoid modifying the live DOM
+  const clonedDoc = document.documentElement.cloneNode(true);
+
+  // Remove Polish extension elements from clone (don't save our UI)
+  clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+  const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+  if (overlayWrapper) {
+    overlayWrapper.remove();
+  }
+
+  // Get clean HTML without Polish elements
+  const currentHTML = clonedDoc.outerHTML;
+
   // Generate project ID if needed
   if (!currentProjectId) {
     currentProjectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
-  
+
   const project = {
     id: currentProjectId,
     name: currentProjectName,
@@ -2144,11 +2230,11 @@ async function handleSaveProject() {
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
-  
+
   const storageKey = `polish_projects_${currentUrl}`;
   chrome.storage.local.get([storageKey], (result) => {
     const projects = result[storageKey] || [];
-    
+
     // Update or add project
     const existingIndex = projects.findIndex(p => p.id === currentProjectId);
     if (existingIndex >= 0) {
@@ -2156,11 +2242,11 @@ async function handleSaveProject() {
     } else {
       projects.push(project);
     }
-    
+
     chrome.storage.local.set({ [storageKey]: projects }, () => {
       isProjectSaved = true;
       showNotification(`Project "${currentProjectName}" saved`, 'success');
-      console.log('Project saved');
+      console.log('Project saved successfully (without Polish elements)');
     });
   });
 }
@@ -2173,19 +2259,36 @@ function handleDiscard() {
     showNotification('No initial state available', 'error');
     return;
   }
-  
-  // Revert to initial HTML
-  document.documentElement.outerHTML = initialHTML;
-  
-  // Reset project state (but keep name)
-  isProjectSaved = false;
-  
-  // Re-initialize overlay
-  setTimeout(() => {
-    injectOverlay();
-    setupOverlayEventListeners();
+
+  try {
+    // Parse the initial HTML safely
+    const parser = new DOMParser();
+    const initialDoc = parser.parseFromString(initialHTML, 'text/html');
+
+    // Use surgical replacement to preserve Polish overlay
+    replaceBodyContentPreservingOverlay(initialDoc.body.innerHTML);
+
+    // Reset project state (but keep name)
+    isProjectSaved = false;
+
+    // Clear selection
+    selectedElement = null;
+    currentlyHighlightedElement = null;
+
+    // Clear any highlights
+    if (overlayElement) {
+      overlayElement.style.display = 'none';
+    }
+
+    // Update UI immediately (no setTimeout needed)
+    updateElementInfo(null, null);
+    updateUIForState();
+
     showNotification('Changes discarded', 'success');
-  }, 100);
+  } catch (error) {
+    console.error('Failed to discard changes:', error);
+    showNotification('Failed to discard changes', 'error');
+  }
 }
 
 /**
