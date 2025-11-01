@@ -747,6 +747,7 @@ body.polish-overlay-active::after {
   justify-content: space-between;
   padding: 16px;
   border-bottom: 1px solid #e5e7eb;
+  gap: 12px;
 }
 
 .polish-versions-header h3 {
@@ -812,6 +813,17 @@ body.polish-overlay-active::after {
   padding-top: 16px;
 }
 
+.polish-versions-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.polish-versions-list-header .polish-versions-label {
+  margin-bottom: 0;
+}
+
 .polish-projects-list {
   display: flex;
   flex-direction: column;
@@ -826,6 +838,8 @@ body.polish-overlay-active::after {
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
+  border-left: 3px solid transparent;
+  margin-bottom: 4px;
 }
 
 .polish-project-item:hover {
@@ -834,6 +848,7 @@ body.polish-overlay-active::after {
 
 .polish-project-item.active {
   background: #eff6ff;
+  border-left-color: #3b82f6;
 }
 
 .polish-project-item.active .polish-project-item-name {
@@ -841,11 +856,59 @@ body.polish-overlay-active::after {
   font-weight: 500;
 }
 
+/* Live Website special styling */
+.polish-project-item-live {
+  background: #f0fdf4;
+  border-left-color: #10b981;
+}
+
+.polish-project-item-live:hover {
+  background: #dcfce7;
+}
+
+.polish-project-item-live.active {
+  background: #d1fae5;
+  border-left-color: #10b981;
+}
+
+.polish-project-item-live .polish-project-item-name {
+  color: #065f46;
+  font-weight: 500;
+}
+
+.polish-project-item-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.polish-project-item-icon {
+  flex-shrink: 0;
+  color: #10b981;
+}
+
 .polish-project-item-name {
   flex: 1;
   font-size: 14px;
   color: #374151;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polish-project-item-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #d1fae5;
+  color: #065f46;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
 }
 
 .polish-project-item-menu {
@@ -873,7 +936,7 @@ body.polish-overlay-active::after {
   font-size: 13px;
 }
 
-/* Delete Overlay */
+/* Project Menu Overlay (Delete/Duplicate) */
 .polish-delete-overlay {
   position: fixed;
   z-index: 2147483650;
@@ -891,6 +954,39 @@ body.polish-overlay-active::after {
   overflow: hidden;
 }
 
+.polish-project-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+  text-align: left;
+}
+
+.polish-project-menu-item:hover {
+  background: #f3f4f6;
+}
+
+.polish-project-menu-item-danger {
+  color: #ef4444;
+}
+
+.polish-project-menu-item-danger:hover {
+  background: #fee2e2;
+}
+
+.polish-project-menu-item svg {
+  flex-shrink: 0;
+}
+
+/* Delete button - original style (white overlay with red button) */
 .polish-delete-btn {
   display: flex;
   align-items: center;
