@@ -29,6 +29,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleAnswerDOMQuestion(message.data, sendResponse);
       return true; // Keep channel open for async response
 
+    case 'PERFORM_DOM_TASK':
+      handlePerformDOMTask(message.data, sendResponse);
+      return true; // Keep channel open for async response
+
     case 'PING':
       sendResponse({ success: true, message: 'Service worker is alive' });
       return false;
@@ -195,6 +199,37 @@ async function handleAnswerDOMQuestion(data, sendResponse) {
   } catch (error) {
     console.error('Error in handleAnswerDOMQuestion:', error);
     sendResponse({ success: false, error: error.message || 'Failed to answer question' });
+  }
+}
+
+/**
+ * Handle perform DOM task request (for auto mode)
+ * @param {Object} data - Request data with userRequest, relevantDOM, and relevantSelectors
+ * @param {Function} sendResponse - Callback to send response
+ */
+async function handlePerformDOMTask(data, sendResponse) {
+  try {
+    const { userRequest, relevantDOM, relevantSelectors } = data;
+    if (!userRequest || !relevantDOM) {
+      sendResponse({ success: false, error: 'Missing required data: userRequest or relevantDOM' });
+      return;
+    }
+
+    // Get API key from storage
+    const apiKey = await getApiKey();
+    if (!apiKey) {
+      sendResponse({ success: false, error: 'API key not found. Please set your API key.' });
+      return;
+    }
+
+    console.log('Performing DOM task...');
+    const modifications = await performDOMTask(apiKey, userRequest, relevantDOM, relevantSelectors || []);
+    console.log('Task modifications generated:', modifications);
+
+    sendResponse({ success: true, modifications: modifications });
+  } catch (error) {
+    console.error('Error in handlePerformDOMTask:', error);
+    sendResponse({ success: false, error: error.message || 'Failed to perform task' });
   }
 }
 

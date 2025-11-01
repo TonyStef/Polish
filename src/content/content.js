@@ -11,7 +11,7 @@ let polishOverlayWrapper = null;
 let isOverlayVisible = false;
 
 // State management
-let currentMode = 'edit'; // 'edit' or 'chat'
+let currentMode = null; // 'edit', 'chat', or null (auto mode - default)
 let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
@@ -184,7 +184,7 @@ function createOverlayManually() {
             </button>
           </div>
           <div class="polish-mode-buttons">
-            <button id="polish-edit-btn" class="polish-mode-btn polish-mode-btn-active" title="Edit Mode">
+            <button id="polish-edit-btn" class="polish-mode-btn" title="Edit Mode">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M11.333 2a1.414 1.414 0 012 2L6 11.333l-3.333 1L4 9l7.333-7.333z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
@@ -1317,6 +1317,12 @@ async function handleSend() {
     return;
   }
 
+  // Handle Auto mode (neither Edit nor Chat selected)
+  if (currentMode === null || currentMode === undefined) {
+    await handleAutoMode(userRequest);
+    return;
+  }
+
   // Edit mode logic (existing)
   // If in edit mode and no element selected, enable selection mode
   if (currentMode === 'edit' && !selectedElement) {
@@ -1561,6 +1567,200 @@ async function handleChatSend(userRequest) {
 }
 
 /**
+ * Handle auto mode (neither Edit nor Chat selected) - automatically perform tasks
+ */
+async function handleAutoMode(userRequest) {
+  // Create user message for chat history
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    timestamp: Date.now(),
+    role: 'user',
+    content: userRequest,
+    mode: 'auto'
+  };
+
+  // Save and display user message
+  try {
+    await saveChatMessage(userMessage);
+    appendMessageToChat(userMessage);
+  } catch (error) {
+    console.error('Failed to save user message:', error);
+  }
+
+  // Disable input during processing
+  elements.modificationInput.disabled = true;
+  elements.sendBtn.disabled = true;
+  elements.modificationInput.value = '';
+  showModificationStatus('Analyzing page structure...', 'loading');
+
+  try {
+    // Step 1: Extract semantic DOM summary
+    const semanticTree = extractSemanticDOM();
+    const domSummary = semanticTreeToString(semanticTree);
+
+    showModificationStatus('Identifying relevant parts...', 'loading');
+
+    // Step 2: Call API to identify relevant DOM parts
+    const identificationResponse = await chrome.runtime.sendMessage({
+      type: 'IDENTIFY_DOM_PARTS',
+      data: {
+        userQuestion: userRequest,
+        domSummary: domSummary
+      }
+    });
+
+    if (!identificationResponse || !identificationResponse.success) {
+      throw new Error(identificationResponse?.error || 'Failed to identify relevant DOM parts');
+    }
+
+    const { relevantSelectors, needsCSS } = identificationResponse.identification;
+
+    showModificationStatus('Extracting relevant content...', 'loading');
+
+    // Step 3: Extract relevant DOM based on identification
+    const relevantDOM = extractRelevantDOM(
+      relevantSelectors || ['body'],
+      needsCSS || false
+    );
+
+    showModificationStatus('Performing task...', 'loading');
+
+    // Step 4: Ask LLM to perform the task and return modifications
+    const taskResponse = await chrome.runtime.sendMessage({
+      type: 'PERFORM_DOM_TASK',
+      data: {
+        userRequest: userRequest,
+        relevantDOM: `HTML:\n${relevantDOM.html}\n\nCSS:\n${relevantDOM.css}`,
+        relevantSelectors: relevantSelectors || []
+      }
+    });
+
+    if (!taskResponse || !taskResponse.success) {
+      throw new Error(taskResponse?.error || 'Failed to perform task');
+    }
+
+    // Step 5: Apply modifications to identified elements
+    const taskResult = taskResponse.modifications; // This is the whole response object
+    const modificationsArray = taskResult.modifications || []; // Array of modifications
+    let appliedCount = 0;
+
+    if (modificationsArray && modificationsArray.length > 0) {
+      for (const modification of modificationsArray) {
+        const { selector, css_changes, html_changes, action } = modification;
+        
+        try {
+          // Find elements matching the selector
+          const elementsToModify = document.querySelectorAll(selector);
+          
+          if (elementsToModify.length === 0) {
+            console.warn(`No elements found for selector: ${selector}`);
+            continue;
+          }
+
+          // Apply modifications to each matching element
+          elementsToModify.forEach(element => {
+            // Skip Polish extension elements
+            if (element.hasAttribute('data-polish-extension')) {
+              return;
+            }
+
+            try {
+              let elementModified = false;
+              
+              // Handle different action types
+              if (action === 'remove' || action === 'delete') {
+                element.remove();
+                elementModified = true;
+              } else if (action === 'hide') {
+                element.style.display = 'none';
+                elementModified = true;
+              } else {
+                // Standard CSS/HTML modifications (default action is "modify")
+                if (css_changes && css_changes.trim()) {
+                  applyCSSChanges(element, css_changes);
+                  elementModified = true;
+                }
+
+                if (html_changes && html_changes.trim()) {
+                  applyHTMLChanges(element, html_changes);
+                  elementModified = true;
+                }
+              }
+              
+              // Count each element once, not each modification
+              if (elementModified) {
+                appliedCount++;
+              }
+            } catch (error) {
+              console.error(`Failed to apply modification to element with selector ${selector}:`, error);
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to query selector ${selector}:`, error);
+        }
+      }
+    }
+
+    // Create assistant message
+    const assistantMessage = {
+      id: `msg_${Date.now() + 1}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: taskResult?.summary || `Task completed. Modified ${appliedCount} element(s).`,
+      mode: 'auto'
+    };
+
+    // Save and display assistant message
+    try {
+      await saveChatMessage(assistantMessage);
+      appendMessageToChat(assistantMessage);
+    } catch (error) {
+      console.error('Failed to save assistant message:', error);
+    }
+
+    if (appliedCount > 0) {
+      showModificationStatus(`Task completed! Modified ${appliedCount} element(s).`, 'success');
+    } else {
+      showModificationStatus('Task completed, but no elements were modified.', 'warning');
+    }
+
+    setTimeout(() => {
+      showModificationStatus('', '');
+      hideNotification();
+    }, 3000);
+
+  } catch (error) {
+    console.error('Auto mode failed:', error);
+    let errorMessage = error.message || 'Failed to perform task';
+    if (errorMessage.includes('CORS')) {
+      errorMessage = 'API Error: Please check your API key and permissions';
+    }
+    showModificationStatus(errorMessage, 'error');
+
+    // Save error message to chat history
+    const errorMessage_obj = {
+      id: `msg_${Date.now() + 2}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: `Error: ${errorMessage}`,
+      mode: 'auto'
+    };
+
+    try {
+      await saveChatMessage(errorMessage_obj);
+      appendMessageToChat(errorMessage_obj);
+    } catch (saveError) {
+      console.error('Failed to save error message:', saveError);
+    }
+  } finally {
+    // Re-enable input
+    elements.modificationInput.disabled = false;
+    elements.sendBtn.disabled = false;
+    updateUIForState();
+  }
+}
+
+/**
  * Send modification request
  */
 async function sendModificationRequest(userRequest) {
@@ -1616,10 +1816,15 @@ function updateUIForState() {
       elements.modificationInput.disabled = true;
       elements.modificationInput.placeholder = 'Select a web element...';
       elements.sendBtn.disabled = false; // Can click send to enable selection mode
-    } else {
+    } else if (currentMode === 'chat') {
       // In chat mode - allow free text
       elements.modificationInput.disabled = false;
       elements.modificationInput.placeholder = 'Ask Polish...';
+      elements.sendBtn.disabled = false;
+    } else {
+      // Auto mode (neither edit nor chat) - allow free text for task requests
+      elements.modificationInput.disabled = false;
+      elements.modificationInput.placeholder = 'Tell Polish what to do...';
       elements.sendBtn.disabled = false;
     }
   }
@@ -3252,24 +3457,27 @@ function createMessageElement(message) {
   if (message.mode) {
     const mode = document.createElement('span');
     mode.className = 'polish-message-mode';
-    mode.textContent = message.mode === 'edit' ? 'Edit' : 'Chat';
+    if (message.mode === 'edit') {
+      mode.textContent = 'Edit';
+    } else if (message.mode === 'chat') {
+      mode.textContent = 'Chat';
+    } else if (message.mode === 'auto') {
+      mode.textContent = 'Auto';
+    } else {
+      mode.textContent = message.mode || 'Edit';
+    }
     header.appendChild(mode);
   }
 
   div.appendChild(header);
 
-  // Message content (support markdown-like formatting for chat responses)
+  // Message content (support markdown formatting for chat and auto mode responses)
   const content = document.createElement('div');
   content.className = 'polish-message-content';
   
-  // For chat mode, preserve line breaks and basic formatting
-  if (message.mode === 'chat' && message.role === 'assistant') {
-    // Convert markdown-style code blocks to <pre><code>
-    let formattedContent = message.content
-      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\n/g, '<br>');
-    content.innerHTML = formattedContent;
+  // For chat and auto mode assistant messages, render full markdown
+  if ((message.mode === 'chat' || message.mode === 'auto') && message.role === 'assistant') {
+    content.innerHTML = renderMarkdown(message.content);
   } else {
     content.textContent = message.content;
   }
@@ -3476,6 +3684,135 @@ function isSafeToModify(element) {
   }
 
   return true;
+}
+
+/**
+ * Render markdown content to HTML
+ * Supports: code blocks, inline code, headers, bold, italic, lists, links, blockquotes
+ */
+function renderMarkdown(text) {
+  if (!text) return '';
+  
+  // Use placeholders to protect code blocks from other markdown processing
+  const codeBlockPlaceholders = [];
+  const inlineCodePlaceholders = [];
+  
+  // Step 1: Extract and protect code blocks (```...```)
+  let html = text.replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const placeholder = `__CODE_BLOCK_${codeBlockPlaceholders.length}__`;
+    codeBlockPlaceholders.push({
+      placeholder,
+      lang: lang || 'text',
+      code: code.trim()
+    });
+    return placeholder;
+  });
+  
+  // Step 2: Extract and protect inline code (`...`)
+  html = html.replace(/`([^`\n]+)`/g, (match, code) => {
+    const placeholder = `__INLINE_CODE_${inlineCodePlaceholders.length}__`;
+    inlineCodePlaceholders.push({
+      placeholder,
+      code: code.trim()
+    });
+    return placeholder;
+  });
+  
+  // Step 3: Process headers (# ## ###)
+  html = html.replace(/^### (.*?)$/gm, '<h3 class="polish-markdown-h3">$1</h3>');
+  html = html.replace(/^## (.*?)$/gm, '<h2 class="polish-markdown-h2">$1</h2>');
+  html = html.replace(/^# (.*?)$/gm, '<h1 class="polish-markdown-h1">$1</h1>');
+  
+  // Step 4: Process blockquotes (> text)
+  html = html.replace(/^>\s+(.+)$/gm, '<blockquote class="polish-markdown-blockquote">$1</blockquote>');
+  
+  // Step 5: Process horizontal rules (--- or ***)
+  html = html.replace(/^---$/gm, '<hr class="polish-markdown-hr">');
+  html = html.replace(/^\*\*\*$/gm, '<hr class="polish-markdown-hr">');
+  
+  // Step 6: Process unordered lists (- or *)
+  const listItems = [];
+  html = html.replace(/^[\s]*[-*]\s+(.+)$/gm, (match, content) => {
+    listItems.push(content);
+    return `__LIST_ITEM_${listItems.length - 1}__`;
+  });
+  
+  // Step 7: Process ordered lists (1. 2. etc.)
+  html = html.replace(/^\d+\.\s+(.+)$/gm, (match, content) => {
+    listItems.push(content);
+    return `__LIST_ITEM_${listItems.length - 1}__`;
+  });
+  
+  // Step 8: Wrap consecutive list items
+  html = html.replace(/(__LIST_ITEM_\d+__(?:\s*__LIST_ITEM_\d+__)*)/g, (match) => {
+    const items = match.match(/__LIST_ITEM_(\d+)__/g).map(item => {
+      const index = parseInt(item.match(/\d+/)[0]);
+      return `<li class="polish-markdown-li">${listItems[index]}</li>`;
+    });
+    return `<ul class="polish-markdown-ul">${items.join('')}</ul>`;
+  });
+  
+  // Step 9: Process links [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="polish-markdown-link">$1</a>');
+  
+  // Step 10: Process bold (**text**)
+  html = html.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  
+  // Step 11: Process bold (__text__) - but be careful not to conflict with underscores
+  html = html.replace(/\b__([^_\n]+?)__\b/g, '<strong>$1</strong>');
+  
+  // Step 12: Process italic (*text*) - only if not part of **bold** (already processed)
+  html = html.replace(/([^*]|^)\*([^*\n]+?)\*([^*]|$)/g, '$1<em>$2</em>$3');
+  
+  // Step 13: Process italic (_text_) - only if not part of __bold__ (already processed)
+  html = html.replace(/([^_]|^)_([^_\n]+?)_([^_]|$)/g, (match, before, text, after) => {
+    // Skip if this was already processed as bold
+    if (match.includes('<strong>')) return match;
+    return `${before}<em>${text}</em>${after}`;
+  });
+  
+  // Step 14: Escape HTML
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Step 15: Restore code blocks (un-escape their content)
+  codeBlockPlaceholders.forEach(({ placeholder, lang, code }) => {
+    const escapedCode = code
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+    html = html.replace(placeholder, `<pre class="polish-markdown-code-block"><code class="language-${lang}">${escapedCode}</code></pre>`);
+  });
+  
+  // Step 16: Restore inline code
+  inlineCodePlaceholders.forEach(({ placeholder, code }) => {
+    const escapedCode = code
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+    html = html.replace(placeholder, `<code class="polish-markdown-inline-code">${escapedCode}</code>`);
+  });
+  
+  // Step 17: Process paragraphs (split by double line breaks)
+  html = html.split(/\n\n+/).map(para => {
+    para = para.trim();
+    if (!para) return '';
+    // Don't wrap if it's already a block element
+    if (/^<(pre|h[1-6]|ul|ol|blockquote|hr|p)/.test(para)) {
+      return para;
+    }
+    return `<p class="polish-markdown-p">${para}</p>`;
+  }).join('\n\n');
+  
+  // Step 18: Process single line breaks (convert to <br> but not in code blocks)
+  html = html.replace(/\n/g, '<br>');
+  
+  // Clean up any double <br> that might result from paragraph splits
+  html = html.replace(/<br><br>/g, '<br>');
+  
+  return html;
 }
 
 /**
