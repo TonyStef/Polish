@@ -3081,13 +3081,15 @@ async function handleDiscard() {
   
   // Re-initialize overlay
   setTimeout(() => {
-    injectOverlay();
-    setupOverlayEventListeners();
-    showNotification('Changes discarded', 'success');
-  } catch (error) {
-    console.error('Failed to discard changes:', error);
-    showNotification('Failed to discard changes', 'error');
-  }
+    try {
+      injectOverlay();
+      setupOverlayEventListeners();
+      showNotification('Changes discarded', 'success');
+    } catch (error) {
+      console.error('Failed to discard changes:', error);
+      showNotification('Failed to discard changes', 'error');
+    }
+  }, 100);
 }
 
 /**
