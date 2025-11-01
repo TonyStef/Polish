@@ -1,10 +1,17 @@
 /**
  * Claude API Wrapper
  * Handles communication with Anthropic's Messages API
+ *
+ * IMPORTANT: Module Loading
+ *
+ * This file is loaded by service-worker.js using importScripts() (classic script loading).
+ * No export/import statements allowed - functions are available in global scope.
+ *
+ * Used only by: src/background/service-worker.js (line 7: importScripts('../utils/api.js'))
  */
 
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-3-5-sonnet-20241022';
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const API_VERSION = '2023-06-01';
 
 /**
@@ -31,7 +38,8 @@ async function requestModification(apiKey, userRequest, elementContext) {
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': API_VERSION
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,

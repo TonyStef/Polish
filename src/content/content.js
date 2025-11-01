@@ -527,16 +527,23 @@ function setupOverlayEventListeners() {
  */
 function showOverlayUI() {
   if (!elements.overlayWrapper) return;
-  
+
   isOverlayVisible = true;
   elements.overlayWrapper.classList.add('active');
   document.documentElement.classList.add('polish-overlay-active');
   document.body.classList.add('polish-overlay-active');
-  
+
   // Apply current view mode
   applyViewMode();
   updateViewModeButton();
-  
+
+  // Load and display chat history
+  loadChatHistory().then(messages => {
+    displayChatHistory(messages);
+  }).catch(error => {
+    console.error('Failed to load chat history:', error);
+  });
+
   // Check if API key exists, show appropriate UI
   if (!apiKey) {
     showApiKeySection();
@@ -915,7 +922,7 @@ async function handleSend() {
   }
 
   const userRequest = elements.modificationInput.value.trim();
-  
+
   if (!userRequest || userRequest.length < 3) {
     showModificationStatus('Please enter a request.', 'error');
     return;
@@ -938,6 +945,28 @@ async function handleSend() {
     return;
   }
 
+  // Create user message for chat history
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    timestamp: Date.now(),
+    role: 'user',
+    content: userRequest,
+    mode: currentMode || 'edit',
+    elementContext: selectedElement ? {
+      tagName: selectedElement.tagName.toLowerCase(),
+      selector: generateSelector(selectedElement)
+    } : null
+  };
+
+  // Save and display user message
+  try {
+    await saveChatMessage(userMessage);
+    appendMessageToChat(userMessage);
+  } catch (error) {
+    console.error('Failed to save user message:', error);
+    // Continue even if save fails
+  }
+
   // Disable input during processing
   elements.modificationInput.disabled = true;
   elements.sendBtn.disabled = true;
@@ -946,16 +975,35 @@ async function handleSend() {
   try {
     // Send modification request
     const response = await sendModificationRequest(userRequest);
-    
+
     if (response && response.success) {
+      // Create assistant message for chat history
+      const assistantMessage = {
+        id: `msg_${Date.now() + 1}`,
+        timestamp: Date.now(),
+        role: 'assistant',
+        content: response.modifications.explanation || 'Modifications applied',
+        mode: currentMode || 'edit',
+        modifications: response.modifications
+      };
+
+      // Save and display assistant message
+      try {
+        await saveChatMessage(assistantMessage);
+        appendMessageToChat(assistantMessage);
+      } catch (error) {
+        console.error('Failed to save assistant message:', error);
+        // Continue even if save fails
+      }
+
       showModificationStatus('Modifications applied successfully!', 'success');
       elements.modificationInput.value = '';
-      
+
       // Clear selection after successful modification
       selectedElement = null;
       hideOverlay();
       updateElementInfo(null, null);
-      
+
       setTimeout(() => {
         showModificationStatus('', '');
         elements.modificationStatus.classList.add('hidden');
@@ -972,6 +1020,23 @@ async function handleSend() {
       errorMessage = 'API Error: Please check your API key and permissions';
     }
     showModificationStatus(errorMessage, 'error');
+
+    // Save error message to chat history
+    const errorMessage_obj = {
+      id: `msg_${Date.now() + 2}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: `Error: ${errorMessage}`,
+      mode: currentMode || 'edit'
+    };
+
+    try {
+      await saveChatMessage(errorMessage_obj);
+      appendMessageToChat(errorMessage_obj);
+    } catch (saveError) {
+      console.error('Failed to save error message:', saveError);
+    }
+
     // Re-enable input on error, keep selection if it exists
     elements.modificationInput.disabled = false;
     elements.sendBtn.disabled = false;
@@ -2130,6 +2195,240 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ============================================================================
+// Chat History Functions
+// ============================================================================
+
+/**
+ * Load chat history for current domain from chrome.storage.local
+ * @returns {Promise<Array>} Array of message objects
+ */
+async function loadChatHistory() {
+  const domain = window.location.hostname;
+
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['polish_chat_history'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to load chat history:', chrome.runtime.lastError);
+        resolve([]);
+        return;
+      }
+
+      const allHistory = result.polish_chat_history || {};
+      const domainHistory = allHistory[domain] || [];
+      console.log(`Loaded ${domainHistory.length} messages for ${domain}`);
+      resolve(domainHistory);
+    });
+  });
+}
+
+/**
+ * Save a chat message to chrome.storage.local
+ * Auto-prunes to keep only 100 most recent messages per domain
+ * @param {Object} message - Message object to save
+ */
+async function saveChatMessage(message) {
+  const domain = window.location.hostname;
+  const MAX_MESSAGES = 100;
+
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(['polish_chat_history'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to get chat history:', chrome.runtime.lastError);
+        reject(chrome.runtime.lastError);
+        return;
+      }
+
+      const allHistory = result.polish_chat_history || {};
+      let domainHistory = allHistory[domain] || [];
+
+      // Add new message
+      domainHistory.push(message);
+
+      // Auto-prune if over limit (keep newest messages)
+      if (domainHistory.length > MAX_MESSAGES) {
+        domainHistory = domainHistory.slice(-MAX_MESSAGES);
+      }
+
+      allHistory[domain] = domainHistory;
+
+      chrome.storage.local.set({ polish_chat_history: allHistory }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Failed to save chat message:', chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else {
+          console.log('Chat message saved successfully');
+          resolve();
+        }
+      });
+    });
+  });
+}
+
+/**
+ * Clear chat history for current domain
+ */
+async function clearChatHistory() {
+  const domain = window.location.hostname;
+
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(['polish_chat_history'], (result) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+        return;
+      }
+
+      const allHistory = result.polish_chat_history || {};
+      delete allHistory[domain];
+
+      chrome.storage.local.set({ polish_chat_history: allHistory }, () => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          console.log(`Chat history cleared for ${domain}`);
+          resolve();
+        }
+      });
+    });
+  });
+}
+
+/**
+ * Display chat history in the chat messages container
+ * @param {Array} messages - Array of message objects
+ */
+function displayChatHistory(messages) {
+  if (!elements.chatMessages) return;
+
+  // Clear existing messages
+  elements.chatMessages.innerHTML = '';
+
+  // If no messages, show empty state
+  if (messages.length === 0) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'polish-chat-empty-state';
+    emptyState.innerHTML = `
+      <p>No messages yet. Start by selecting Edit or Chat mode!</p>
+    `;
+    elements.chatMessages.appendChild(emptyState);
+    return;
+  }
+
+  // Render each message
+  messages.forEach(msg => {
+    const messageEl = createMessageElement(msg);
+    elements.chatMessages.appendChild(messageEl);
+  });
+
+  // Auto-scroll to bottom
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+/**
+ * Create DOM element for a single chat message
+ * @param {Object} message - Message object
+ * @returns {HTMLElement} Message element
+ */
+function createMessageElement(message) {
+  const div = document.createElement('div');
+  div.className = `polish-chat-message ${message.role}`;
+  div.setAttribute('data-message-id', message.id);
+
+  // Message header (timestamp + mode badge)
+  const header = document.createElement('div');
+  header.className = 'polish-message-header';
+
+  const time = document.createElement('span');
+  time.className = 'polish-message-time';
+  time.textContent = formatTime(message.timestamp);
+  header.appendChild(time);
+
+  if (message.mode) {
+    const mode = document.createElement('span');
+    mode.className = 'polish-message-mode';
+    mode.textContent = message.mode === 'edit' ? 'Edit' : 'Chat';
+    header.appendChild(mode);
+  }
+
+  div.appendChild(header);
+
+  // Message content
+  const content = document.createElement('div');
+  content.className = 'polish-message-content';
+  content.textContent = message.content;
+  div.appendChild(content);
+
+  // Element context (for edit mode messages)
+  if (message.elementContext) {
+    const element = document.createElement('div');
+    element.className = 'polish-message-element';
+    element.textContent = `<${message.elementContext.tagName}>`;
+    if (message.elementContext.selector) {
+      element.title = message.elementContext.selector;
+    }
+    div.appendChild(element);
+  }
+
+  return div;
+}
+
+/**
+ * Append a single message to the chat and scroll to bottom
+ * @param {Object} message - Message object
+ */
+function appendMessageToChat(message) {
+  if (!elements.chatMessages) return;
+
+  // Remove empty state if it exists
+  const emptyState = elements.chatMessages.querySelector('.polish-chat-empty-state');
+  if (emptyState) {
+    emptyState.remove();
+  }
+
+  const messageEl = createMessageElement(message);
+  elements.chatMessages.appendChild(messageEl);
+
+  // Auto-scroll to bottom with smooth animation
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+/**
+ * Format timestamp for display
+ * @param {number} timestamp - Unix timestamp in milliseconds
+ * @returns {string} Formatted time string
+ */
+function formatTime(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+
+  // If today, show just the time
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  // If this year, show date without year
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  // Otherwise show full date
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
 // ============================================================================

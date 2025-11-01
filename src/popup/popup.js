@@ -19,6 +19,147 @@ const API_KEY_MIN_LENGTH = 20;
 const API_KEY_PREFIX = 'sk-ant-';
 
 /* ===========================
+   MESSAGING UTILITIES (INLINED)
+   =========================== */
+
+/**
+ * IMPORTANT: Chrome Extension Module Loading Constraints
+ *
+ * These messaging utilities are inlined here instead of imported because:
+ *
+ * 1. Service workers CANNOT use ES6 modules - must use importScripts()
+ * 2. Popup scripts CAN use ES6 modules BUT only with <script type="module">
+ * 3. Content scripts CAN use ES6 modules BUT must be declared in manifest
+ * 4. To maintain consistency and avoid build steps, we inline utilities
+ *
+ * This follows the "No build process - Pure vanilla JavaScript" principle
+ * stated in CLAUDE.md.
+ *
+ * Original source files (now deleted):
+ * - src/utils/messaging.js
+ * - src/utils/messaging-errors.js
+ * - src/constants/message-types.js
+ */
+
+/**
+ * Message types for extension communication
+ * @readonly
+ */
+const MESSAGE_TYPES = {
+  // Popup → Content Script
+  TOGGLE_SELECTION_MODE: 'TOGGLE_SELECTION_MODE',
+  GET_SELECTION_STATUS: 'GET_SELECTION_STATUS',
+  GET_SELECTED_ELEMENT_INFO: 'GET_SELECTED_ELEMENT_INFO',
+  MODIFY_ELEMENT_REQUEST: 'MODIFY_ELEMENT_REQUEST',
+
+  // Content Script → Popup
+  ELEMENT_SELECTED: 'ELEMENT_SELECTED',
+
+  // Content Script → Service Worker
+  MODIFY_ELEMENT: 'MODIFY_ELEMENT',
+
+  // Popup → Service Worker
+  VALIDATE_API_KEY: 'VALIDATE_API_KEY',
+  PING: 'PING'
+};
+
+/**
+ * Get current active tab
+ * @returns {Promise<chrome.tabs.Tab>} Active tab object
+ */
+async function getCurrentTab() {
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
+
+    if (!tab) {
+      throw new Error('No active tab found');
+    }
+
+    logger.debug('Current tab:', tab.id, tab.url);
+    return tab;
+
+  } catch (error) {
+    logger.error('Failed to get current tab:', error);
+    throw error;
+  }
+}
+
+/**
+ * Send message to content script in active tab
+ * @param {Object} message - Message object with {type, data?}
+ * @param {number} [timeout=MESSAGE_TIMEOUT] - Timeout in milliseconds
+ * @returns {Promise<Object>} Response from content script
+ */
+async function sendToContentScript(message, timeout = MESSAGE_TIMEOUT) {
+  const tab = await getCurrentTab();
+  const timeoutMs = timeout || MESSAGE_TIMEOUT;
+
+  logger.debug(`Sending ${message.type} to content script (tab ${tab.id})`);
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Message "${message.type}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    chrome.tabs.sendMessage(tab.id, message, (response) => {
+      clearTimeout(timeoutId);
+
+      if (chrome.runtime.lastError) {
+        const errorMsg = chrome.runtime.lastError.message;
+
+        // User-friendly error messages
+        if (errorMsg.includes('Could not establish connection')) {
+          reject(new Error('Page not ready. Please refresh and try again.'));
+        } else if (errorMsg.includes('receiving end does not exist')) {
+          reject(new Error('Extension not loaded on this page. Please refresh.'));
+        } else {
+          reject(new Error(errorMsg));
+        }
+      } else {
+        logger.debug(`Received response for ${message.type}:`, response);
+        resolve(response || { success: false });
+      }
+    });
+  });
+}
+
+/**
+ * Format error for user display
+ * @param {Error|string} error - Error to format
+ * @returns {string} User-friendly error message
+ */
+function formatUserError(error) {
+  if (!error) return 'An unknown error occurred';
+
+  const message = error.message || String(error);
+  const lowerMsg = message.toLowerCase();
+
+  // Map common errors to user-friendly messages
+  if (lowerMsg.includes('timeout')) {
+    return 'Request timed out. Please try again.';
+  }
+  if (lowerMsg.includes('no active tab')) {
+    return 'No active tab found. Please try again.';
+  }
+  if (lowerMsg.includes('could not establish connection') ||
+      lowerMsg.includes('page not ready')) {
+    return 'Could not connect to page. Please refresh and try again.';
+  }
+  if (lowerMsg.includes('service worker') || lowerMsg.includes('extension context')) {
+    return 'Extension service unavailable. Please reload the extension.';
+  }
+  if (lowerMsg.includes('api')) {
+    return message; // API errors are usually descriptive
+  }
+
+  // Default: truncate and return
+  return message.substring(0, 200);
+}
+
+/* ===========================
    STATE MANAGEMENT
    =========================== */
 
@@ -479,7 +620,7 @@ async function handleToggleSelection() {
 
   try {
     const response = await sendToContentScript({
-      type: 'TOGGLE_SELECTION_MODE'
+      type: MESSAGE_TYPES.TOGGLE_SELECTION_MODE
     });
 
     if (response && response.success) {
@@ -506,7 +647,7 @@ async function handleToggleSelection() {
 async function checkSelectionStatus() {
   try {
     const response = await sendToContentScript({
-      type: 'GET_SELECTION_STATUS'
+      type: MESSAGE_TYPES.GET_SELECTION_STATUS
     });
 
     if (response && response.success) {
@@ -531,7 +672,7 @@ async function checkSelectionStatus() {
 async function checkForSelectedElement() {
   try {
     const response = await sendToContentScript({
-      type: 'GET_SELECTED_ELEMENT_INFO'
+      type: MESSAGE_TYPES.GET_SELECTED_ELEMENT_INFO
     });
 
     if (response && response.success && response.hasSelection) {
@@ -563,7 +704,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
 
     setState(STATES.ELEMENT_SELECTED);
-    sendResponse({ received: true });
+    sendResponse({ success: true }); // Consistent response format
   }
 });
 
@@ -618,12 +759,13 @@ async function handleApplyModification() {
 
   try {
     // Send modification request to content script
+    // Using longer timeout (10s) as this includes API call processing
     const response = await sendToContentScript(
       {
-        type: 'MODIFY_ELEMENT_REQUEST',
+        type: MESSAGE_TYPES.MODIFY_ELEMENT_REQUEST,
         data: { userRequest }
       },
-      MESSAGE_TIMEOUT
+      10000 // 10 seconds for modification request (includes API call)
     );
 
     if (response && response.success) {
@@ -698,91 +840,17 @@ function showModificationStatus(message, type) {
 }
 
 /* ===========================
-   MESSAGE PASSING
-   =========================== */
-
-/**
- * Send message to content script in active tab
- * @param {Object} message - Message to send
- * @param {number} timeout - Timeout in milliseconds
- * @returns {Promise<Object>} Response from content script
- */
-async function sendToContentScript(message, timeout = MESSAGE_TIMEOUT) {
-  try {
-    // Get active tab
-    const tab = await getCurrentTab();
-
-    if (!tab) {
-      throw new Error('No active tab found');
-    }
-
-    // Send message with timeout
-    return await Promise.race([
-      new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tab.id, message, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-          } else {
-            resolve(response);
-          }
-        });
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Message timeout')), timeout)
-      )
-    ]);
-
-  } catch (error) {
-    logger.error('Failed to send message to content script:', error);
-    throw error;
-  }
-}
-
-/**
- * Get current active tab
- * @returns {Promise<Object>} Tab object
- */
-async function getCurrentTab() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tab;
-  } catch (error) {
-    logger.error('Failed to get current tab:', error);
-    return null;
-  }
-}
-
-/* ===========================
    UTILITY FUNCTIONS
    =========================== */
 
 /**
  * Format error message for user display
+ * Uses inlined formatUserError utility
  * @param {Error|string} error - Error object or message
  * @returns {string} User-friendly error message
  */
 function formatErrorMessage(error) {
-  const message = error.message || String(error);
-
-  // Handle common error types
-  if (message.includes('timeout')) {
-    return 'Request timed out. Please try again.';
-  }
-
-  if (message.includes('No active tab')) {
-    return 'Could not find active tab. Please refresh and try again.';
-  }
-
-  if (message.includes('Could not establish connection')) {
-    return 'Could not connect to the page. Please refresh and try again.';
-  }
-
-  if (message.includes('rate limit')) {
-    return 'API rate limit reached. Please wait a moment and try again.';
-  }
-
-  // Default: return the error message (sanitized)
-  return message.substring(0, 200); // Limit length
+  return formatUserError(error);
 }
 
 /**

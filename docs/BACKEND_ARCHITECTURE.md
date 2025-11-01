@@ -277,12 +277,8 @@ chrome.runtime.onMessage.addListener(handleMessage)
 // Sends messages to background script
 chrome.runtime.sendMessage({ type: 'MODIFY_ELEMENT', data: {...} })
 
-// Window messages for popup communication
-window.addEventListener('message', async (event) => {
-  if (event.data.type === 'POLISH_MODIFY_REQUEST') {
-    // Process modification request
-  }
-});
+// All popup ↔ content communication uses chrome.runtime messaging
+
 ```
 
 #### D. User Notifications
@@ -414,7 +410,7 @@ Shows floating notifications in top-right corner:
 |-------------|-----------|------|---------|
 | `TOGGLE_SELECTION_MODE` | popup → content | none | Enable/disable selection |
 | `ELEMENT_SELECTED` | content → popup | selector, tagName | Notify element was selected |
-| `POLISH_MODIFY_REQUEST` | popup → content (window message) | userRequest | Send user's modification request |
+| `MODIFY_ELEMENT_REQUEST` | popup → content | userRequest | Send user's modification request |
 | `MODIFY_ELEMENT` | content → background | userRequest, elementContext | Request Claude API call |
 | `MODIFY_ELEMENT` response | background → content | modifications | Return Claude's changes |
 | `VALIDATE_API_KEY` | popup → background | apiKey | Check API key validity |
