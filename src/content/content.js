@@ -11,7 +11,7 @@ let polishOverlayWrapper = null;
 let isOverlayVisible = false;
 
 // State management
-let currentMode = 'edit'; // 'edit' or 'chat'
+let currentMode = null; // 'edit', 'chat', or null (auto mode - default)
 let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
@@ -184,7 +184,7 @@ function createOverlayManually() {
             </button>
           </div>
           <div class="polish-mode-buttons">
-            <button id="polish-edit-btn" class="polish-mode-btn polish-mode-btn-active" title="Edit Mode">
+            <button id="polish-edit-btn" class="polish-mode-btn" title="Edit Mode">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M11.333 2a1.414 1.414 0 012 2L6 11.333l-3.333 1L4 9l7.333-7.333z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
@@ -1830,10 +1830,15 @@ function updateUIForState() {
       elements.modificationInput.disabled = true;
       elements.modificationInput.placeholder = 'Select a web element...';
       elements.sendBtn.disabled = false; // Can click send to enable selection mode
-    } else {
+    } else if (currentMode === 'chat') {
       // In chat mode - allow free text
       elements.modificationInput.disabled = false;
       elements.modificationInput.placeholder = 'Ask Polish...';
+      elements.sendBtn.disabled = false;
+    } else {
+      // Auto mode (neither edit nor chat) - allow free text for task requests
+      elements.modificationInput.disabled = false;
+      elements.modificationInput.placeholder = 'Tell Polish what to do...';
       elements.sendBtn.disabled = false;
     }
   }
