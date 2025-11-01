@@ -195,3 +195,167 @@ function validateApiKey(apiKey) {
   // Anthropic API keys start with 'sk-ant-'
   return typeof apiKey === 'string' && apiKey.startsWith('sk-ant-') && apiKey.length > 20;
 }
+
+/**
+ * Step 1: Ask Claude to identify which parts of the DOM to extract based on user's question
+ * @param {string} apiKey - User's Anthropic API key
+ * @param {string} userQuestion - User's question about the HTML DOM
+ * @param {string} domSummary - Summary/semantic tree of the DOM
+ * @returns {Promise<Object>} - Response indicating which DOM parts to extract
+ */
+async function identifyRelevantDOMParts(apiKey, userQuestion, domSummary) {
+  if (!apiKey) {
+    throw new Error('API key is required');
+  }
+
+  const prompt = `You are analyzing a user's question about a webpage's HTML DOM structure.
+
+**User's Question:**
+"${userQuestion}"
+
+**DOM Summary (Semantic Tree):**
+${domSummary}
+
+**Task:**
+Analyze the user's question and determine which specific parts of the DOM are relevant to answer it.
+
+Return ONLY a valid JSON object in this exact format:
+{
+  "relevantSelectors": ["selector1", "selector2", ...],
+  "relevantSections": ["section1", "section2", ...],
+  "needsCSS": true/false,
+  "needsJS": true/false,
+  "reasoning": "Brief explanation of what parts are needed"
+}
+
+**Important:**
+- Provide specific CSS selectors that identify the relevant elements
+- If the question is about structure, include parent-child relationships
+- If the question is about styling, set needsCSS to true
+- Return ONLY the JSON object, nothing else`;
+
+  try {
+    const response = await fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 2000,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        `Claude API error: ${response.status} - ${errorData.error?.message || response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+    const textContent = data.content?.[0]?.text;
+
+    if (!textContent) {
+      throw new Error('No response content from Claude');
+    }
+
+    // Parse JSON response
+    let jsonText = textContent.trim();
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/```json?\n?/g, '').replace(/```\s*$/g, '');
+    }
+
+    const parsed = JSON.parse(jsonText);
+    return parsed;
+
+  } catch (error) {
+    console.error('Failed to identify relevant DOM parts:', error);
+    throw error;
+  }
+}
+
+/**
+ * Step 2: Ask Claude a detailed question with full relevant DOM context
+ * @param {string} apiKey - User's Anthropic API key
+ * @param {string} userQuestion - User's question about the HTML DOM
+ * @param {string} relevantDOM - Full HTML and CSS of relevant DOM parts
+ * @returns {Promise<string>} - Detailed answer from Claude
+ */
+async function answerDOMQuestion(apiKey, userQuestion, relevantDOM) {
+  if (!apiKey) {
+    throw new Error('API key is required');
+  }
+
+  const prompt = `You are an expert web developer analyzing a webpage's HTML DOM structure and answering detailed questions about it.
+
+**User's Question:**
+"${userQuestion}"
+
+**Relevant DOM Context:**
+${relevantDOM}
+
+**Instructions:**
+1. Analyze the user's question carefully
+2. Provide a detailed, helpful answer based on the DOM structure
+3. Include specific CSS selectors, element paths, or code examples when relevant
+4. Be thorough but concise
+5. If the question asks for selectors, provide accurate CSS selectors
+6. If the question asks about structure, explain the element hierarchy
+7. Format your answer clearly using markdown if helpful
+
+**Answer the user's question:**`;
+
+  try {
+    const response = await fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 4096,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.3
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        `Claude API error: ${response.status} - ${errorData.error?.message || response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+    const textContent = data.content?.[0]?.text;
+
+    if (!textContent) {
+      throw new Error('No response content from Claude');
+    }
+
+    return textContent;
+
+  } catch (error) {
+    console.error('Failed to answer DOM question:', error);
+    throw error;
+  }
+}

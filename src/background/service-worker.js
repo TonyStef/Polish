@@ -21,6 +21,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleValidateApiKey(message.data, sendResponse);
       return true;
 
+    case 'IDENTIFY_DOM_PARTS':
+      handleIdentifyDOMParts(message.data, sendResponse);
+      return true; // Keep channel open for async response
+
+    case 'ANSWER_DOM_QUESTION':
+      handleAnswerDOMQuestion(message.data, sendResponse);
+      return true; // Keep channel open for async response
+
     case 'PING':
       sendResponse({ success: true, message: 'Service worker is alive' });
       return false;
@@ -126,6 +134,68 @@ async function saveApiKey(apiKey) {
       }
     });
   });
+}
+
+/**
+ * Handle identify DOM parts request (Step 1 of chat mode)
+ * @param {Object} data - Request data with userQuestion and domSummary
+ * @param {Function} sendResponse - Callback to send response
+ */
+async function handleIdentifyDOMParts(data, sendResponse) {
+  try {
+    const { userQuestion, domSummary } = data;
+    if (!userQuestion || !domSummary) {
+      sendResponse({ success: false, error: 'Missing required data: userQuestion or domSummary' });
+      return;
+    }
+
+    // Get API key from storage
+    const apiKey = await getApiKey();
+    if (!apiKey) {
+      sendResponse({ success: false, error: 'API key not found. Please set your API key.' });
+      return;
+    }
+
+    console.log('Identifying relevant DOM parts...');
+    const identification = await identifyRelevantDOMParts(apiKey, userQuestion, domSummary);
+    console.log('Identified relevant parts:', identification);
+
+    sendResponse({ success: true, identification: identification });
+  } catch (error) {
+    console.error('Error in handleIdentifyDOMParts:', error);
+    sendResponse({ success: false, error: error.message || 'Failed to identify DOM parts' });
+  }
+}
+
+/**
+ * Handle answer DOM question request (Step 2 of chat mode)
+ * @param {Object} data - Request data with userQuestion and relevantDOM
+ * @param {Function} sendResponse - Callback to send response
+ */
+async function handleAnswerDOMQuestion(data, sendResponse) {
+  try {
+    const { userQuestion, relevantDOM } = data;
+    if (!userQuestion || !relevantDOM) {
+      sendResponse({ success: false, error: 'Missing required data: userQuestion or relevantDOM' });
+      return;
+    }
+
+    // Get API key from storage
+    const apiKey = await getApiKey();
+    if (!apiKey) {
+      sendResponse({ success: false, error: 'API key not found. Please set your API key.' });
+      return;
+    }
+
+    console.log('Generating answer to DOM question...');
+    const answer = await answerDOMQuestion(apiKey, userQuestion, relevantDOM);
+    console.log('Answer generated');
+
+    sendResponse({ success: true, answer: answer });
+  } catch (error) {
+    console.error('Error in handleAnswerDOMQuestion:', error);
+    sendResponse({ success: false, error: error.message || 'Failed to answer question' });
+  }
 }
 
 /**

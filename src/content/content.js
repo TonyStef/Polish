@@ -15,6 +15,7 @@ let currentMode = 'edit'; // 'edit' or 'chat'
 let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
+let phoneModeViewportWrapper = null; // Inner viewport wrapper for phone mode
 
 // Versioning state
 let currentProjectId = null; // Current project ID
@@ -74,6 +75,12 @@ const elements = {
  */
 async function init() {
   console.log('Polish content script initialized');
+
+  // Don't initialize if we're inside the phone iframe (avoid duplicate overlays)
+  if (window.frameElement && window.frameElement.hasAttribute('data-polish-phone-iframe')) {
+    console.log('Skipping init - inside phone iframe');
+    return;
+  }
 
   // Set up message listener FIRST so it's ready immediately
   chrome.runtime.onMessage.addListener(handleMessage);
@@ -811,6 +818,10 @@ function handleToggleViewMode() {
   updateViewModeButton();
 }
 
+// Viewport meta tag reference
+let viewportMetaTag = null;
+let originalViewportContent = null;
+
 /**
  * Apply current view mode to the website preview
  */
@@ -820,63 +831,289 @@ function applyViewMode() {
   }
 
   if (viewMode === 'phone') {
+    document.documentElement.classList.add('polish-phone-mode');
     document.body.classList.add('polish-phone-mode');
     document.body.classList.remove('polish-desktop-mode');
     createPhoneModeWrapper();
+    setPhoneViewport();
   } else {
+    document.documentElement.classList.remove('polish-phone-mode');
     document.body.classList.add('polish-desktop-mode');
     document.body.classList.remove('polish-phone-mode');
     removePhoneModeWrapper();
+    restoreDesktopViewport();
   }
 }
 
 /**
- * Create wrapper div for phone mode to constrain website content
+ * Create iframe wrapper for phone mode that loads the page in mobile viewport
  */
 function createPhoneModeWrapper() {
   if (phoneModeWrapper) return; // Already exists
   
-  // Create wrapper div
-  phoneModeWrapper = document.createElement('div');
-  phoneModeWrapper.id = 'polish-phone-wrapper';
-  phoneModeWrapper.setAttribute('data-polish-extension', 'true');
-  phoneModeWrapper.style.cssText = `
-    width: 375px;
-    max-width: 375px;
-    margin: 0;
-    position: relative;
-    background: inherit;
-    min-height: 100%;
-  `;
-  
-  // Move all body children into wrapper (except our extension elements)
-  const children = Array.from(document.body.children).filter(child => 
-    !child.hasAttribute('data-polish-extension') && child.id !== 'polish-overlay-wrapper'
+  // Hide original page content (but keep our overlay visible)
+  const originalContent = Array.from(document.body.children).filter(child => 
+    !child.hasAttribute('data-polish-extension') && 
+    child.id !== 'polish-overlay-wrapper'
   );
   
-  children.forEach(child => {
-    phoneModeWrapper.appendChild(child);
+  // Store reference to original content for restoration
+  phoneModeWrapper = {
+    container: null,
+    iframe: null,
+    hiddenContent: originalContent
+  };
+  
+  // Create container for phone bezel
+  const container = document.createElement('div');
+  container.id = 'polish-phone-wrapper';
+  container.setAttribute('data-polish-extension', 'true');
+  container.className = 'polish-phone-viewport-container';
+  
+  // Create iframe that will load the current page
+  const iframe = document.createElement('iframe');
+  iframe.id = 'polish-phone-iframe';
+  iframe.setAttribute('data-polish-extension', 'true');
+  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Mark so content script skips init in iframe
+  iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals');
+  iframe.style.cssText = `
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: white;
+  `;
+  
+  // Hide original content
+  originalContent.forEach(child => {
+    if (child.style) {
+      child.dataset.polishOriginalDisplay = child.style.display || '';
+      child.style.display = 'none';
+    }
   });
   
-  // Insert wrapper as first child of body
-  document.body.insertBefore(phoneModeWrapper, document.body.firstChild);
+  // Load current page in iframe
+  iframe.src = window.location.href;
+  
+  // When iframe loads, inject mobile viewport code
+  iframe.onload = () => {
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+      const iframeWin = iframe.contentWindow;
+      
+      // Set viewport meta tag
+      let viewportMeta = iframeDoc.querySelector('meta[name="viewport"]');
+      if (viewportMeta) {
+        viewportMeta.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no');
+      } else {
+        viewportMeta = iframeDoc.createElement('meta');
+        viewportMeta.name = 'viewport';
+        viewportMeta.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no');
+        iframeDoc.head.insertBefore(viewportMeta, iframeDoc.head.firstChild);
+      }
+      
+      // Override window dimensions
+      try {
+        Object.defineProperty(iframeWin, 'innerWidth', {
+          get: () => 375,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'innerHeight', {
+          get: () => 812,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'outerWidth', {
+          get: () => 375,
+          configurable: true
+        });
+        Object.defineProperty(iframeWin, 'outerHeight', {
+          get: () => 812,
+          configurable: true
+        });
+      } catch (e) {
+        console.warn('Could not override iframe window dimensions:', e);
+      }
+      
+      // Constrain html and body to 375px
+      const style = iframeDoc.createElement('style');
+      style.id = 'polish-mobile-viewport-style';
+      style.textContent = `
+        html, body {
+          width: 375px !important;
+          min-width: 375px !important;
+          max-width: 375px !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow-x: hidden !important;
+        }
+        * {
+          box-sizing: border-box;
+        }
+      `;
+      iframeDoc.head.appendChild(style);
+      
+      // Trigger resize event
+      iframeWin.dispatchEvent(new Event('resize'));
+      iframeWin.dispatchEvent(new Event('orientationchange'));
+      
+    } catch (e) {
+      console.error('Error setting up mobile viewport in iframe:', e);
+      // If same-origin policy blocks access, fall back to simpler approach
+      showNotification('Note: Mobile view may not fully activate due to page security settings', 'warning');
+    }
+  };
+  
+  container.appendChild(iframe);
+  phoneModeWrapper.container = container;
+  phoneModeWrapper.iframe = iframe;
+  
+  // Insert container into body
+  document.body.insertBefore(container, document.body.firstChild);
 }
 
 /**
  * Remove phone mode wrapper and restore original structure
  */
 function removePhoneModeWrapper() {
-  if (!phoneModeWrapper) return;
+  if (!phoneModeWrapper || !phoneModeWrapper.container) return;
   
-  // Move all wrapper children back to body
-  const children = Array.from(phoneModeWrapper.children);
-  children.forEach(child => {
-    document.body.insertBefore(child, phoneModeWrapper);
-  });
+  // Show original content
+  if (phoneModeWrapper.hiddenContent) {
+    phoneModeWrapper.hiddenContent.forEach(child => {
+      if (child.dataset.polishOriginalDisplay !== undefined) {
+        child.style.display = child.dataset.polishOriginalDisplay;
+        delete child.dataset.polishOriginalDisplay;
+      } else {
+        child.style.display = '';
+      }
+    });
+  }
   
-  // Remove wrapper
-  phoneModeWrapper.remove();
+  // Remove iframe container
+  phoneModeWrapper.container.remove();
   phoneModeWrapper = null;
+}
+
+/**
+ * Set viewport to phone dimensions (375x812)
+ */
+function setPhoneViewport() {
+  // Find or create viewport meta tag
+  viewportMetaTag = document.querySelector('meta[name="viewport"]');
+  
+  if (viewportMetaTag) {
+    // Save original viewport content
+    originalViewportContent = viewportMetaTag.getAttribute('content');
+    // Set phone viewport - force 375px width for mobile rendering
+    viewportMetaTag.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+  } else {
+    // Create new viewport meta tag
+    viewportMetaTag = document.createElement('meta');
+    viewportMetaTag.name = 'viewport';
+    viewportMetaTag.setAttribute('content', 'width=375, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+    const head = document.head || document.getElementsByTagName('head')[0];
+    head.insertBefore(viewportMetaTag, head.firstChild);
+    originalViewportContent = null; // No original to restore
+  }
+  
+  // Add a style element to override viewport dimensions via CSS
+  // This helps ensure media queries respond correctly
+  let phoneViewportStyle = document.getElementById('polish-phone-viewport-style');
+  if (!phoneViewportStyle) {
+    phoneViewportStyle = document.createElement('style');
+    phoneViewportStyle.id = 'polish-phone-viewport-style';
+    phoneViewportStyle.setAttribute('data-polish-extension', 'true');
+    phoneViewportStyle.textContent = `
+      /* Force mobile viewport behavior */
+      html.polish-phone-mode {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+        overflow-x: hidden;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      
+      html.polish-phone-mode body {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      
+      /* Make the viewport wrapper act as a proper container */
+      #polish-phone-viewport {
+        width: 375px !important;
+        min-width: 375px !important;
+        max-width: 375px !important;
+      }
+      
+      /* Constrain all content within viewport to 375px */
+      #polish-phone-viewport * {
+        max-width: 375px !important;
+        box-sizing: border-box;
+      }
+      
+      /* Force media queries to trigger at mobile breakpoints */
+      @media screen and (max-width: 767px) {
+        html.polish-phone-mode body,
+        html.polish-phone-mode #polish-phone-viewport {
+          width: 375px !important;
+        }
+      }
+      
+      /* Override common desktop-only styles */
+      html.polish-phone-mode body > *:not([data-polish-extension]) {
+        width: 100% !important;
+        max-width: 375px !important;
+      }
+    `;
+    document.head.appendChild(phoneViewportStyle);
+  }
+  
+  // Note: Window dimension overrides are now handled inside the iframe
+  // This function is called after iframe is created
+}
+
+/**
+ * Restore desktop viewport
+ */
+function restoreDesktopViewport() {
+  // Remove phone viewport style
+  const phoneViewportStyle = document.getElementById('polish-phone-viewport-style');
+  if (phoneViewportStyle) {
+    phoneViewportStyle.remove();
+  }
+  
+  // Restore original window dimensions
+  try {
+    delete window.innerWidth;
+    delete window.innerHeight;
+    delete window.outerWidth;
+    delete window.outerHeight;
+  } catch (e) {
+    console.warn('Could not restore window dimensions:', e);
+  }
+  
+  if (viewportMetaTag) {
+    if (originalViewportContent) {
+      // Restore original viewport content
+      viewportMetaTag.setAttribute('content', originalViewportContent);
+    } else {
+      // Remove the viewport meta tag we created
+      viewportMetaTag.remove();
+    }
+    viewportMetaTag = null;
+    originalViewportContent = null;
+  }
+  
+  // Force reflow
+  document.body.offsetHeight;
+  
+  // Trigger resize event
+  window.dispatchEvent(new Event('resize'));
+  window.dispatchEvent(new Event('orientationchange'));
 }
 
 /**
@@ -1074,6 +1311,13 @@ async function handleSend() {
     return;
   }
 
+  // Handle Chat mode differently
+  if (currentMode === 'chat') {
+    await handleChatSend(userRequest);
+    return;
+  }
+
+  // Edit mode logic (existing)
   // If in edit mode and no element selected, enable selection mode
   if (currentMode === 'edit' && !selectedElement) {
     if (!isSelectionMode) {
@@ -1184,6 +1428,132 @@ async function handleSend() {
     }
 
     // Re-enable input on error, keep selection if it exists
+    elements.modificationInput.disabled = false;
+    elements.sendBtn.disabled = false;
+    updateUIForState();
+  }
+}
+
+/**
+ * Handle sending messages in Chat mode (two-step API process)
+ */
+async function handleChatSend(userRequest) {
+  // Create user message for chat history
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    timestamp: Date.now(),
+    role: 'user',
+    content: userRequest,
+    mode: 'chat'
+  };
+
+  // Save and display user message
+  try {
+    await saveChatMessage(userMessage);
+    appendMessageToChat(userMessage);
+  } catch (error) {
+    console.error('Failed to save user message:', error);
+  }
+
+  // Disable input during processing
+  elements.modificationInput.disabled = true;
+  elements.sendBtn.disabled = true;
+  elements.modificationInput.value = '';
+  showModificationStatus('Analyzing page structure...', 'loading');
+
+  try {
+    // Step 1: Extract semantic DOM summary
+    const semanticTree = extractSemanticDOM();
+    const domSummary = semanticTreeToString(semanticTree);
+
+    showModificationStatus('Identifying relevant parts...', 'loading');
+
+    // Step 2: Call API to identify relevant DOM parts
+    const identificationResponse = await chrome.runtime.sendMessage({
+      type: 'IDENTIFY_DOM_PARTS',
+      data: {
+        userQuestion: userRequest,
+        domSummary: domSummary
+      }
+    });
+
+    if (!identificationResponse || !identificationResponse.success) {
+      throw new Error(identificationResponse?.error || 'Failed to identify relevant DOM parts');
+    }
+
+    const { relevantSelectors, needsCSS } = identificationResponse.identification;
+
+    showModificationStatus('Extracting relevant content...', 'loading');
+
+    // Step 3: Extract relevant DOM based on identification
+    const relevantDOM = extractRelevantDOM(
+      relevantSelectors || ['body'],
+      needsCSS || false
+    );
+
+    showModificationStatus('Generating answer...', 'loading');
+
+    // Step 4: Get detailed answer with relevant DOM
+    const answerResponse = await chrome.runtime.sendMessage({
+      type: 'ANSWER_DOM_QUESTION',
+      data: {
+        userQuestion: userRequest,
+        relevantDOM: `HTML:\n${relevantDOM.html}\n\nCSS:\n${relevantDOM.css}`
+      }
+    });
+
+    if (!answerResponse || !answerResponse.success) {
+      throw new Error(answerResponse?.error || 'Failed to get answer');
+    }
+
+    // Create assistant message
+    const assistantMessage = {
+      id: `msg_${Date.now() + 1}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: answerResponse.answer,
+      mode: 'chat'
+    };
+
+    // Save and display assistant message
+    try {
+      await saveChatMessage(assistantMessage);
+      appendMessageToChat(assistantMessage);
+    } catch (error) {
+      console.error('Failed to save assistant message:', error);
+    }
+
+    showModificationStatus('Answer generated!', 'success');
+    setTimeout(() => {
+      showModificationStatus('', '');
+      hideNotification();
+    }, 2000);
+
+  } catch (error) {
+    console.error('Chat send failed:', error);
+    let errorMessage = error.message || 'Failed to process question';
+    if (errorMessage.includes('CORS')) {
+      errorMessage = 'API Error: Please check your API key and permissions';
+    }
+    showModificationStatus(errorMessage, 'error');
+
+    // Save error message to chat history
+    const errorMessage_obj = {
+      id: `msg_${Date.now() + 2}`,
+      timestamp: Date.now(),
+      role: 'assistant',
+      content: `Error: ${errorMessage}`,
+      mode: 'chat'
+    };
+
+    try {
+      await saveChatMessage(errorMessage_obj);
+      appendMessageToChat(errorMessage_obj);
+    } catch (saveError) {
+      console.error('Failed to save error message:', saveError);
+    }
+  } finally {
+    // Re-enable input
     elements.modificationInput.disabled = false;
     elements.sendBtn.disabled = false;
     updateUIForState();
@@ -2886,10 +3256,22 @@ function createMessageElement(message) {
 
   div.appendChild(header);
 
-  // Message content
+  // Message content (support markdown-like formatting for chat responses)
   const content = document.createElement('div');
   content.className = 'polish-message-content';
-  content.textContent = message.content;
+  
+  // For chat mode, preserve line breaks and basic formatting
+  if (message.mode === 'chat' && message.role === 'assistant') {
+    // Convert markdown-style code blocks to <pre><code>
+    let formattedContent = message.content
+      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\n/g, '<br>');
+    content.innerHTML = formattedContent;
+  } else {
+    content.textContent = message.content;
+  }
+  
   div.appendChild(content);
 
   // Element context (for edit mode messages)
@@ -3092,6 +3474,194 @@ function isSafeToModify(element) {
   }
 
   return true;
+}
+
+/**
+ * Extract and create a semantic tree representation of the DOM
+ * This creates a compressed, structured representation for LLM processing
+ */
+function extractSemanticDOM() {
+  const body = document.body;
+  if (!body) return {};
+
+  const semanticTree = {
+    url: window.location.href,
+    title: document.title,
+    elements: []
+  };
+
+  // Walk the DOM tree and create semantic representation
+  function walkDOM(node, depth = 0, path = []) {
+    // Skip our extension elements
+    if (node.hasAttribute && node.hasAttribute('data-polish-extension')) {
+      return null;
+    }
+
+    // Limit depth to avoid excessive nesting
+    if (depth > 10) return null;
+
+    // Skip script, style, and other non-content elements
+    const skipTags = ['script', 'style', 'noscript', 'meta', 'link', 'title', 'head'];
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tagName = node.tagName.toLowerCase();
+      if (skipTags.includes(tagName)) {
+        return null;
+      }
+
+      // Skip hidden elements
+      if (node.offsetParent === null && getComputedStyle(node).display === 'none') {
+        return null;
+      }
+
+      // Get text content (first 100 chars)
+      const text = node.textContent?.trim().substring(0, 100) || '';
+      
+      // Get classes and ID
+      const classes = Array.from(node.classList || []);
+      const id = node.id || null;
+      
+      // Generate selector
+      const selector = id ? `#${CSS.escape(id)}` : 
+                      classes.length > 0 ? `.${classes[0]}` : 
+                      tagName;
+
+      // Create semantic representation
+      const semanticNode = {
+        type: tagName,
+        text: text,
+        classes: classes.slice(0, 5), // Limit to 5 classes
+        id: id,
+        selector: selector,
+        path: path.length > 0 ? path.join(' > ') : tagName,
+        children: []
+      };
+
+      // Recurse children
+      const childPath = [...path, `${tagName}${id ? '#' + id : classes.length > 0 ? '.' + classes[0] : ''}`];
+      for (let child of Array.from(node.children)) {
+        const childNode = walkDOM(child, depth + 1, childPath);
+        if (childNode && semanticNode.children.length < 20) { // Limit children
+          semanticNode.children.push(childNode);
+        }
+      }
+
+      return semanticNode;
+    }
+    return null;
+  }
+
+  // Walk the body
+  for (let child of Array.from(body.children)) {
+    const node = walkDOM(child, 0, []);
+    if (node) {
+      semanticTree.elements.push(node);
+    }
+  }
+
+  return semanticTree;
+}
+
+/**
+ * Convert semantic tree to string for LLM consumption
+ */
+function semanticTreeToString(semanticTree) {
+  let output = `Page: ${semanticTree.title}\nURL: ${semanticTree.url}\n\nElements:\n\n`;
+
+  function formatNode(node, indent = 0) {
+    if (!node) return '';
+    const prefix = '  '.repeat(indent);
+    let result = `${prefix}- <${node.type}>`;
+    
+    if (node.id) result += ` #${node.id}`;
+    if (node.classes.length > 0) result += ` .${node.classes.join('.')}`;
+    if (node.text) result += ` "${node.text.substring(0, 50)}"`;
+    result += `\n    Selector: ${node.selector}\n    Path: ${node.path}\n`;
+    
+    if (node.children && node.children.length > 0) {
+      node.children.forEach(child => {
+        result += formatNode(child, indent + 1);
+      });
+    }
+    
+    return result;
+  }
+
+  semanticTree.elements.slice(0, 50).forEach(element => {
+    output += formatNode(element);
+    output += '\n';
+  });
+
+  return output;
+}
+
+/**
+ * Extract relevant DOM parts based on selectors and needs
+ */
+function extractRelevantDOM(selectors, needsCSS = false) {
+  let relevantHTML = '';
+  let relevantCSS = '';
+
+  // Extract elements matching selectors
+  const elements = [];
+  const addedElements = new Set(); // Avoid duplicates
+  
+  selectors.forEach(selector => {
+    try {
+      const matches = document.querySelectorAll(selector);
+      matches.forEach(el => {
+        if (!el.hasAttribute('data-polish-extension') && !addedElements.has(el)) {
+          elements.push(el);
+          addedElements.add(el);
+        }
+      });
+    } catch (e) {
+      console.warn(`Invalid selector: ${selector}`, e);
+    }
+  });
+
+  // Extract HTML for matched elements
+  elements.slice(0, 10).forEach(el => { // Limit to 10 elements
+    const clone = el.cloneNode(true);
+    // Remove our extension elements from clone
+    clone.querySelectorAll('[data-polish-extension]').forEach(ext => ext.remove());
+    const html = clone.outerHTML;
+    if (html.length > 5000) {
+      relevantHTML += html.substring(0, 5000) + '\n<!-- ... truncated ... -->\n\n';
+    } else {
+      relevantHTML += html + '\n\n';
+    }
+  });
+
+  // Extract CSS if needed
+  if (needsCSS) {
+    const stylesheets = Array.from(document.styleSheets);
+    stylesheets.forEach(sheet => {
+      try {
+        const rules = Array.from(sheet.cssRules || []);
+        rules.forEach(rule => {
+          // Check if rule matches any of our selectors
+          if (selectors.some(sel => {
+            try {
+              return document.querySelector(sel) && rule.selectorText && 
+                     document.querySelector(sel).matches(rule.selectorText);
+            } catch {
+              return false;
+            }
+          })) {
+            relevantCSS += rule.cssText + '\n';
+          }
+        });
+      } catch (e) {
+        // Cross-origin stylesheets will throw
+      }
+    });
+  }
+
+  return {
+    html: relevantHTML.substring(0, 30000), // Limit total size
+    css: relevantCSS.substring(0, 10000),
+    elementCount: elements.length
+  };
 }
 
 // Initialize when DOM is ready
