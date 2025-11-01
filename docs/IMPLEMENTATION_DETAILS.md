@@ -59,11 +59,7 @@ async function handleModificationRequest(data, sendResponse)
   // Sends response back to popup
 ```
 
-**Legacy Code** (line 293+):
-
-- `window.addEventListener('message')` marked as deprecated
-- Kept for backwards compatibility
-- Will be removed in future version
+The old `window.addEventListener('message')` bridge was removed entirely once the new handler proved stable.
 
 ### 2. popup.js - NEW FILE
 

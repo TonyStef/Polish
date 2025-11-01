@@ -101,6 +101,10 @@ function handleValidateApiKey(data, sendResponse) {
 
 /**
  * Get API key from Chrome storage
+ *
+ * Note: API key is saved directly in popup.js via chrome.storage.local.set()
+ * Service worker only reads the key for API requests
+ *
  * @returns {Promise<string|null>} - API key or null
  */
 async function getApiKey() {
@@ -110,34 +114,5 @@ async function getApiKey() {
     });
   });
 }
-
-/**
- * Save API key to Chrome storage
- * @param {string} apiKey - API key to save
- * @returns {Promise<void>}
- */
-export async function saveApiKey(apiKey) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set({ anthropicApiKey: apiKey }, () => {
-      if (chrome.runtime.lastError) {
-        reject(chrome.runtime.lastError);
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-
-/**
- * Installation handler
- */
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log('Polish extension installed:', details.reason);
-
-  if (details.reason === 'install') {
-    // Open options page on first install
-    chrome.runtime.openOptionsPage();
-  }
-});
 
 console.log('Polish service worker initialized');

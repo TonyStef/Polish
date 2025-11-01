@@ -1,10 +1,17 @@
 /**
  * Claude API Wrapper
  * Handles communication with Anthropic's Messages API
+ *
+ * IMPORTANT: Module Loading
+ *
+ * This file is loaded by service-worker.js using importScripts() (classic script loading).
+ * No export/import statements allowed - functions are available in global scope.
+ *
+ * Used only by: src/background/service-worker.js (line 7: importScripts('../utils/api.js'))
  */
 
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-3-5-sonnet-20241022';
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const API_VERSION = '2023-06-01';
 
 /**
@@ -14,7 +21,7 @@ const API_VERSION = '2023-06-01';
  * @param {Object} elementContext - DOM element context (HTML, CSS, selector)
  * @returns {Promise<Object>} - Claude's response with modifications
  */
-export async function requestModification(apiKey, userRequest, elementContext) {
+async function requestModification(apiKey, userRequest, elementContext) {
   if (!apiKey) {
     throw new Error('API key is required');
   }
@@ -31,7 +38,8 @@ export async function requestModification(apiKey, userRequest, elementContext) {
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': API_VERSION
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,
@@ -183,7 +191,7 @@ function parseClaudeResponse(responseText) {
  * @param {string} apiKey - API key to validate
  * @returns {boolean} - Whether key looks valid
  */
-export function validateApiKey(apiKey) {
+function validateApiKey(apiKey) {
   // Anthropic API keys start with 'sk-ant-'
   return typeof apiKey === 'string' && apiKey.startsWith('sk-ant-') && apiKey.length > 20;
 }

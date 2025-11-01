@@ -16,7 +16,7 @@
 1. Added `GET_SELECTED_ELEMENT_INFO` handler (lines 48-59)
 2. Added `MODIFY_ELEMENT_REQUEST` handler (lines 61-63)
 3. Created `handleModificationRequest()` function (lines 200-291)
-4. Marked `window.addEventListener` as deprecated (line 293)
+4. Removed legacy `window.addEventListener` bridge (no longer needed)
 
 **Why**: Original architecture used `window.postMessage` which doesn't work between popup and content script contexts. Fixed to use proper Chrome message passing API.
 
@@ -277,11 +277,6 @@ These are acceptable for the proof of concept:
 3. **Inline Styles Only**: Doesn't generate CSS files
    - Simpler for POC
    - Works for all use cases
-
-4. **Legacy Code**: `window.addEventListener` still in content.js
-   - Marked as deprecated
-   - Kept for backwards compatibility
-   - Will remove in future version
 
 ### None (Zero Bugs)
 
