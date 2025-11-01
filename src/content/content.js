@@ -16,6 +16,13 @@ let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
 
+// Versioning state
+let currentProjectId = null; // Current project ID
+let currentProjectName = 'new_project'; // Current project name
+let initialHTML = null; // Initial HTML state for discard functionality
+let isProjectSaved = false; // Whether current project is saved
+let currentUrl = null; // Current website URL (normalized)
+
 // DOM elements cache
 const elements = {
   overlayWrapper: null,
@@ -46,7 +53,16 @@ const elements = {
   floatingApiKeyStatus: null,
   floatingNotification: null,
   deselectElementBtn: null,
-  viewModeToggleBtn: null
+  viewModeToggleBtn: null,
+  settingsOverlay: null,
+  settingsApiKeyInput: null,
+  settingsSaveApiKeyBtn: null,
+  settingsApiKeyStatus: null,
+  projectSelectorBtn: null,
+  versionsOverlay: null,
+  deleteOverlay: null,
+  projectNameInput: null,
+  projectsList: null
 };
 
 /**
@@ -63,6 +79,9 @@ function init() {
 
   // Inject persistent overlay (async, but listener is already set up)
   injectOverlay();
+
+  // Initialize versioning system
+  initializeVersioning();
 
   // Load API key (async)
   loadApiKey();
@@ -98,11 +117,12 @@ function createOverlayManually() {
     <div id="polish-top-bar" class="polish-top-bar">
       <div class="polish-top-bar-left">
         <button id="polish-close-btn" class="polish-btn polish-btn-text" title="Close">Close</button>
-        <button id="polish-settings-btn" class="polish-btn polish-btn-icon" title="Settings">
+        <button id="polish-settings-btn" class="polish-btn polish-btn-text" title="Settings">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M13.657 8.685a1.5 1.5 0 00.3 1.655l.05.05a1.816 1.816 0 01-.517 2.975 1.816 1.816 0 01-2.975.517l-.05-.05a1.5 1.5 0 00-1.656-.3 1.5 1.5 0 00-.9 1.373v.143a1.816 1.816 0 01-3.632 0v-.071a1.5 1.5 0 00-.981-1.373 1.5 1.5 0 00-1.655.3l-.05.05a1.816 1.816 0 01-2.975-.517 1.816 1.816 0 01.517-2.975l.05-.05a1.5 1.5 0 00.3-1.655 1.5 1.5 0 00-1.373-.9h-.143a1.816 1.816 0 010-3.632h.071a1.5 1.5 0 001.373-.981 1.5 1.5 0 001.655-.3l.05-.05a1.816 1.816 0 012.975.517l.05.05a1.5 1.5 0 001.655.3h.072a1.5 1.5 0 00.9-1.373v-.143a1.816 1.816 0 013.632 0v.071a1.5 1.5 0 00.9 1.373 1.5 1.5 0 001.656.3l.05-.05a1.816 1.816 0 012.975-.517 1.816 1.816 0 01.517 2.975l-.05.05a1.5 1.5 0 00-.3 1.655v.072a1.5 1.5 0 001.373.9h.143a1.816 1.816 0 010 3.632h-.071a1.5 1.5 0 00-1.373.981z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            <path d="M8 3v2M8 11v2M3 8h2M11 8h2M4.343 4.343l1.414 1.414M10.243 10.243l1.414 1.414M11.657 4.343l-1.414 1.414M5.757 10.243l-1.414 1.414" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
+          Settings
         </button>
       </div>
       <div class="polish-top-bar-center">
@@ -116,9 +136,12 @@ function createOverlayManually() {
             <path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <select id="polish-context-selector" class="polish-context-selector">
-          <option>bloomreach-ai-boost</option>
-        </select>
+        <button id="polish-project-selector-btn" class="polish-project-selector-btn" title="Select Project">
+          <span id="polish-project-name-display">new_project</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button id="polish-view-mode-toggle" class="polish-btn polish-btn-icon" title="Toggle Phone/Desktop View">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <!-- Desktop icon (larger horizontal) -->
@@ -214,6 +237,7 @@ function cacheOverlayElements() {
   elements.deselectElementBtn = document.getElementById('polish-deselect-element-btn');
   elements.chatMessages = document.getElementById('polish-chat-messages');
   elements.viewModeToggleBtn = document.getElementById('polish-view-mode-toggle');
+  elements.projectSelectorBtn = document.getElementById('polish-project-selector-btn');
   
   // Create floating API key overlay (not in HTML, created dynamically)
   createFloatingApiKeyOverlay();
@@ -221,9 +245,129 @@ function cacheOverlayElements() {
   // Create floating notification system (not in HTML, created dynamically)
   createFloatingNotification();
   
+  // Create settings overlay (not in HTML, created dynamically)
+  createSettingsOverlay();
+  
+  // Create versions overlay (not in HTML, created dynamically)
+  createVersionsOverlay();
+  
+  // Create delete overlay (not in HTML, created dynamically)
+  createDeleteOverlay();
+  
   // Initialize view mode button state
   if (elements.viewModeToggleBtn) {
     updateViewModeButton();
+  }
+}
+
+/**
+ * Normalize URL for storage key (remove hash, trailing slash, etc.)
+ */
+function normalizeUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    return `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`.replace(/\/$/, '');
+  } catch (e) {
+    return url.split('#')[0].split('?')[0].replace(/\/$/, '');
+  }
+}
+
+/**
+ * Initialize versioning system - store initial HTML and load projects
+ */
+async function initializeVersioning() {
+  // Normalize current URL
+  currentUrl = normalizeUrl(window.location.href);
+  
+  // Store initial HTML state (only once per page load)
+  if (!initialHTML) {
+    initialHTML = document.documentElement.outerHTML;
+  }
+  
+  // Load projects for this URL
+  await loadProjectsForUrl();
+  
+  // Update project name display
+  updateProjectNameDisplay();
+}
+
+/**
+ * Load projects for current URL
+ */
+async function loadProjectsForUrl() {
+  return new Promise((resolve) => {
+    const storageKey = `polish_projects_${currentUrl}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      const projects = result[storageKey] || [];
+      
+      // If no projects exist, create default "new_project" (unsaved)
+      if (projects.length === 0) {
+        currentProjectId = null;
+        currentProjectName = 'new_project';
+        isProjectSaved = false;
+      } else {
+        // Load first project by default (or find active one)
+        const firstProject = projects[0];
+        currentProjectId = firstProject.id;
+        currentProjectName = firstProject.name;
+        isProjectSaved = true;
+        
+        // Load the project's HTML state
+        loadProjectHTML(firstProject);
+      }
+      
+      resolve();
+    });
+  });
+}
+
+/**
+ * Load project HTML state
+ */
+function loadProjectHTML(project) {
+  if (project && project.html) {
+    try {
+      // Save current HTML before switching (if needed for future undo)
+      // Restore HTML state
+      document.documentElement.outerHTML = project.html;
+      
+      // Store the loaded HTML as the new "initial" state for this project
+      // (so discard works from this project's saved state)
+      // But keep the true initial HTML for the page
+      
+      // Clear selection when switching projects
+      selectedElement = null;
+      
+      // Re-initialize after HTML change
+      setTimeout(() => {
+        injectOverlay();
+        setupOverlayEventListeners();
+        
+        // Re-cache elements that might have been lost
+        cacheOverlayElements();
+        
+        // Clear any highlights
+        if (overlayElement) {
+          overlayElement.style.display = 'none';
+        }
+        
+        // Update UI
+        updateElementInfo(null, null);
+        updateUIForState();
+      }, 100);
+    } catch (error) {
+      console.error('Failed to load project HTML:', error);
+    }
+  }
+}
+
+/**
+ * Update project name display
+ */
+function updateProjectNameDisplay() {
+  const display = document.getElementById('polish-project-name-display');
+  if (display) {
+    display.textContent = currentProjectName;
   }
 }
 
@@ -236,36 +380,78 @@ function setupOverlayEventListeners() {
     elements.closeBtn.addEventListener('click', handleClose);
   }
 
-  // Placeholder buttons (no functionality yet)
+  // Settings button
   if (elements.settingsBtn) {
     elements.settingsBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Settings clicked (placeholder)');
+      e.stopPropagation();
+      toggleSettingsOverlay();
     });
   }
+  
+  // Close settings overlay when clicking outside
+  document.addEventListener('click', (e) => {
+    if (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active')) {
+      if (!elements.settingsOverlay.contains(e.target) && !elements.settingsBtn.contains(e.target)) {
+        hideSettingsOverlay();
+      }
+    }
+  });
 
   // Share Feedback link opens the form in a new tab - no handler needed as it's a regular link
 
+  // Project selector button
+  if (elements.projectSelectorBtn) {
+    elements.projectSelectorBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleVersionsOverlay();
+    });
+  }
+
+  // Discard button - revert to initial state
   if (elements.discardBtn) {
     elements.discardBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Discard clicked (placeholder)');
+      handleDiscard();
     });
   }
 
+  // Save button - save current state to project
   if (elements.saveBtn) {
     elements.saveBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Save clicked (placeholder)');
+      handleSaveProject();
     });
   }
 
+  // Publish button - placeholder (no functionality)
   if (elements.publishBtn) {
     elements.publishBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Publish clicked (placeholder)');
+      console.log('Publish clicked (placeholder - no functionality)');
     });
   }
+  
+  // Close versions overlay when clicking outside
+  document.addEventListener('click', (e) => {
+    // Close delete overlay if clicking outside
+    if (elements.deleteOverlay && !elements.deleteOverlay.classList.contains('hidden')) {
+      if (!elements.deleteOverlay.contains(e.target) && 
+          !e.target.closest('.polish-project-item-menu')) {
+        hideDeleteOverlay();
+      }
+    }
+    
+    // Close versions overlay if clicking outside
+    if (elements.versionsOverlay && elements.versionsOverlay.classList.contains('active')) {
+      if (!elements.versionsOverlay.contains(e.target) && 
+          !elements.projectSelectorBtn.contains(e.target) &&
+          (!elements.deleteOverlay || !elements.deleteOverlay.contains(e.target))) {
+        hideVersionsOverlay();
+      }
+    }
+  });
 
   if (elements.backBtn) {
     elements.backBtn.addEventListener('click', (e) => {
@@ -608,10 +794,16 @@ async function loadApiKey() {
  * Handle save API key
  */
 async function handleSaveApiKey() {
-  const apiKeyValue = (elements.floatingApiKeyInput || elements.apiKeyInput)?.value.trim();
+  const apiKeyValue = (elements.settingsApiKeyInput || elements.floatingApiKeyInput || elements.apiKeyInput)?.value.trim();
+  const statusElement = elements.settingsApiKeyStatus || elements.floatingApiKeyStatus;
   
   if (!apiKeyValue || apiKeyValue.length < 20 || !apiKeyValue.startsWith('sk-ant-')) {
-    showFloatingApiKeyStatus('Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.', 'error');
+    const errorMsg = 'Invalid API key format. Must start with "sk-ant-" and be at least 20 characters.';
+    if (statusElement) {
+      showSettingsApiKeyStatus(errorMsg, 'error');
+    } else {
+      showFloatingApiKeyStatus(errorMsg, 'error');
+    }
     return;
   }
 
@@ -627,16 +819,31 @@ async function handleSaveApiKey() {
     });
 
     apiKey = apiKeyValue;
-    showFloatingApiKeyStatus('API key saved successfully!', 'success');
-    showNotification('API key saved successfully!', 'success');
+    const successMsg = 'API key saved successfully!';
+    if (statusElement) {
+      showSettingsApiKeyStatus(successMsg, 'success');
+    } else {
+      showFloatingApiKeyStatus(successMsg, 'success');
+    }
+    showNotification(successMsg, 'success');
     
     setTimeout(() => {
       hideApiKeySection();
-      updateUIForState();
+      if (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active')) {
+        // Keep settings open, just update UI
+        updateUIForState();
+      } else {
+        updateUIForState();
+      }
     }, 1000);
   } catch (error) {
     console.error('Failed to save API key:', error);
-    showFloatingApiKeyStatus('Failed to save API key. Please try again.', 'error');
+    const errorMsg = 'Failed to save API key. Please try again.';
+    if (statusElement) {
+      showSettingsApiKeyStatus(errorMsg, 'error');
+    } else {
+      showFloatingApiKeyStatus(errorMsg, 'error');
+    }
   }
 }
 
@@ -1346,6 +1553,583 @@ function hideNotification() {
   if (elements.floatingNotification) {
     elements.floatingNotification.classList.add('hidden');
   }
+}
+
+/**
+ * Create settings overlay (positioned bottom-right of Settings button)
+ */
+function createSettingsOverlay() {
+  if (document.getElementById('polish-settings-overlay')) return;
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'polish-settings-overlay';
+  overlay.setAttribute('data-polish-extension', 'true');
+  overlay.className = 'polish-settings-overlay hidden';
+  
+  overlay.innerHTML = `
+    <div class="polish-settings-content">
+      <div class="polish-settings-header">
+        <h3>Settings</h3>
+        <button id="polish-settings-close" class="polish-settings-close-btn" title="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="polish-settings-body">
+        <div class="polish-settings-section">
+          <label for="polish-settings-api-key-input" class="polish-settings-label">Anthropic API Key</label>
+          <div class="polish-settings-input-group">
+            <input 
+              type="password" 
+              id="polish-settings-api-key-input" 
+              class="polish-settings-input" 
+              placeholder="sk-ant-..."
+            />
+            <button id="polish-settings-save-api-key-btn" class="polish-btn polish-btn-primary polish-btn-text">
+              Save
+            </button>
+          </div>
+          <div id="polish-settings-api-key-status" class="polish-settings-status hidden"></div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(overlay);
+  elements.settingsOverlay = overlay;
+  elements.settingsApiKeyInput = document.getElementById('polish-settings-api-key-input');
+  elements.settingsSaveApiKeyBtn = document.getElementById('polish-settings-save-api-key-btn');
+  elements.settingsApiKeyStatus = document.getElementById('polish-settings-api-key-status');
+  
+  // Event listeners
+  const closeBtn = document.getElementById('polish-settings-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      hideSettingsOverlay();
+    });
+  }
+  
+  if (elements.settingsSaveApiKeyBtn) {
+    elements.settingsSaveApiKeyBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleSaveApiKey();
+    });
+  }
+  
+  if (elements.settingsApiKeyInput) {
+    elements.settingsApiKeyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveApiKey();
+      }
+    });
+  }
+}
+
+/**
+ * Show settings overlay (positioned bottom-right of Settings button)
+ */
+function showSettingsOverlay() {
+  if (!elements.settingsOverlay || !elements.settingsBtn) return;
+  
+  // Get Settings button position
+  const settingsBtnRect = elements.settingsBtn.getBoundingClientRect();
+  const overlayWidth = 300; // Width of settings overlay
+  const spacing = 8; // Spacing from button
+  
+  // Calculate position - align right edge of overlay with right edge of button
+  let leftPosition = settingsBtnRect.right - overlayWidth;
+  
+  // Ensure overlay doesn't go off the left edge of screen
+  if (leftPosition < 0) {
+    leftPosition = spacing;
+  }
+  
+  // Ensure overlay doesn't go off the right edge of screen
+  if (leftPosition + overlayWidth > window.innerWidth) {
+    leftPosition = window.innerWidth - overlayWidth - spacing;
+  }
+  
+  // Position overlay below Settings button
+  const topPosition = settingsBtnRect.bottom + spacing;
+  
+  // Ensure overlay doesn't go off the bottom of screen (if needed, position above button)
+  const overlayHeight = 200; // Approximate height of settings overlay
+  let finalTopPosition = topPosition;
+  if (topPosition + overlayHeight > window.innerHeight) {
+    finalTopPosition = settingsBtnRect.top - overlayHeight - spacing;
+    // If still doesn't fit above, just position it and let it scroll
+    if (finalTopPosition < 0) {
+      finalTopPosition = topPosition;
+    }
+  }
+  
+  elements.settingsOverlay.style.top = `${finalTopPosition}px`;
+  elements.settingsOverlay.style.left = `${leftPosition}px`;
+  
+  elements.settingsOverlay.classList.remove('hidden');
+  elements.settingsOverlay.classList.add('active');
+  
+  // Clear input field (user can enter new API key)
+  if (elements.settingsApiKeyInput) {
+    elements.settingsApiKeyInput.value = '';
+    elements.settingsApiKeyInput.placeholder = apiKey ? 'Enter new API key...' : 'sk-ant-...';
+  }
+  
+  // Clear status message
+  if (elements.settingsApiKeyStatus) {
+    elements.settingsApiKeyStatus.classList.add('hidden');
+  }
+  
+  // Focus input
+  if (elements.settingsApiKeyInput) {
+    setTimeout(() => {
+      elements.settingsApiKeyInput.focus();
+    }, 100);
+  }
+}
+
+/**
+ * Hide settings overlay
+ */
+function hideSettingsOverlay() {
+  if (elements.settingsOverlay) {
+    elements.settingsOverlay.classList.add('hidden');
+    elements.settingsOverlay.classList.remove('active');
+  }
+}
+
+/**
+ * Toggle settings overlay
+ */
+function toggleSettingsOverlay() {
+  if (elements.settingsOverlay && elements.settingsOverlay.classList.contains('active')) {
+    hideSettingsOverlay();
+  } else {
+    showSettingsOverlay();
+  }
+}
+
+/**
+ * Show settings API key status
+ */
+function showSettingsApiKeyStatus(message, type) {
+  if (!elements.settingsApiKeyStatus) return;
+  
+  elements.settingsApiKeyStatus.textContent = message;
+  elements.settingsApiKeyStatus.className = `polish-settings-status status-${type}`;
+  elements.settingsApiKeyStatus.classList.remove('hidden');
+  
+  if (type === 'success') {
+    setTimeout(() => {
+      elements.settingsApiKeyStatus.classList.add('hidden');
+    }, 3000);
+  }
+}
+
+/**
+ * Create versions overlay (for project management)
+ */
+function createVersionsOverlay() {
+  if (document.getElementById('polish-versions-overlay')) return;
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'polish-versions-overlay';
+  overlay.setAttribute('data-polish-extension', 'true');
+  overlay.className = 'polish-versions-overlay hidden';
+  
+  overlay.innerHTML = `
+    <div class="polish-versions-content">
+      <div class="polish-versions-header">
+        <h3>Projects</h3>
+        <button id="polish-versions-close" class="polish-versions-close-btn" title="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="polish-versions-body">
+        <div class="polish-versions-current">
+          <label for="polish-project-name-input" class="polish-versions-label">Current Project</label>
+          <input 
+            type="text" 
+            id="polish-project-name-input" 
+            class="polish-versions-input" 
+            placeholder="Project name..."
+          />
+        </div>
+        <div class="polish-versions-list-container">
+          <div class="polish-versions-label" style="margin-bottom: 8px;">All Projects</div>
+          <div id="polish-projects-list" class="polish-projects-list"></div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(overlay);
+  elements.versionsOverlay = overlay;
+  elements.projectNameInput = document.getElementById('polish-project-name-input');
+  elements.projectsList = document.getElementById('polish-projects-list');
+  
+  // Event listeners
+  const closeBtn = document.getElementById('polish-versions-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      hideVersionsOverlay();
+    });
+  }
+  
+  if (elements.projectNameInput) {
+    elements.projectNameInput.addEventListener('change', (e) => {
+      const newName = e.target.value.trim();
+      if (newName && newName !== currentProjectName) {
+        currentProjectName = newName;
+        updateProjectNameDisplay();
+        // If project is saved, update its name in storage
+        if (isProjectSaved && currentProjectId) {
+          updateProjectName(currentProjectId, newName);
+        }
+      }
+    });
+    
+    elements.projectNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.target.blur();
+      }
+    });
+  }
+}
+
+/**
+ * Show versions overlay
+ */
+function showVersionsOverlay() {
+  if (!elements.versionsOverlay || !elements.projectSelectorBtn) return;
+  
+  const btnRect = elements.projectSelectorBtn.getBoundingClientRect();
+  const overlayWidth = 320;
+  const spacing = 8;
+  
+  let leftPosition = btnRect.right - overlayWidth;
+  if (leftPosition < 0) leftPosition = spacing;
+  if (leftPosition + overlayWidth > window.innerWidth) {
+    leftPosition = window.innerWidth - overlayWidth - spacing;
+  }
+  
+  const topPosition = btnRect.bottom + spacing;
+  const overlayHeight = 400;
+  let finalTop = topPosition;
+  if (topPosition + overlayHeight > window.innerHeight) {
+    finalTop = btnRect.top - overlayHeight - spacing;
+    if (finalTop < 0) finalTop = topPosition;
+  }
+  
+  elements.versionsOverlay.style.top = `${finalTop}px`;
+  elements.versionsOverlay.style.left = `${leftPosition}px`;
+  
+  // Update current project name input
+  if (elements.projectNameInput) {
+    elements.projectNameInput.value = currentProjectName;
+  }
+  
+  // Refresh projects list
+  refreshProjectsList();
+  
+  elements.versionsOverlay.classList.remove('hidden');
+  elements.versionsOverlay.classList.add('active');
+}
+
+/**
+ * Hide versions overlay
+ */
+function hideVersionsOverlay() {
+  if (elements.versionsOverlay) {
+    elements.versionsOverlay.classList.add('hidden');
+    elements.versionsOverlay.classList.remove('active');
+  }
+  hideDeleteOverlay();
+}
+
+/**
+ * Toggle versions overlay
+ */
+function toggleVersionsOverlay() {
+  if (elements.versionsOverlay && elements.versionsOverlay.classList.contains('active')) {
+    hideVersionsOverlay();
+  } else {
+    showVersionsOverlay();
+  }
+}
+
+/**
+ * Refresh projects list in overlay
+ */
+async function refreshProjectsList() {
+  if (!elements.projectsList) return;
+  
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    
+    elements.projectsList.innerHTML = '';
+    
+    if (projects.length === 0) {
+      elements.projectsList.innerHTML = '<div class="polish-no-projects">No saved projects</div>';
+      return;
+    }
+    
+    projects.forEach(project => {
+      const item = document.createElement('div');
+      item.className = 'polish-project-item';
+      if (project.id === currentProjectId) {
+        item.classList.add('active');
+      }
+      
+      item.innerHTML = `
+        <span class="polish-project-item-name" data-project-id="${project.id}">${escapeHtml(project.name)}</span>
+        <button class="polish-project-item-menu" data-project-id="${project.id}" title="Options">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="8" cy="4" r="1" fill="currentColor"/>
+            <circle cx="8" cy="8" r="1" fill="currentColor"/>
+            <circle cx="8" cy="12" r="1" fill="currentColor"/>
+          </svg>
+        </button>
+      `;
+      
+      // Click handler to switch project
+      const nameSpan = item.querySelector('.polish-project-item-name');
+      nameSpan.addEventListener('click', () => {
+        switchToProject(project.id);
+      });
+      
+      // Menu button handler
+      const menuBtn = item.querySelector('.polish-project-item-menu');
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showDeleteOverlay(project.id, project.name, menuBtn);
+      });
+      
+      elements.projectsList.appendChild(item);
+    });
+  });
+}
+
+/**
+ * Switch to a different project
+ */
+async function switchToProject(projectId) {
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    const project = projects.find(p => p.id === projectId);
+    
+    if (project) {
+      currentProjectId = project.id;
+      currentProjectName = project.name;
+      isProjectSaved = true;
+      
+      updateProjectNameDisplay();
+      loadProjectHTML(project);
+      hideVersionsOverlay();
+      
+      showNotification(`Switched to project: ${project.name}`, 'success');
+    }
+  });
+}
+
+/**
+ * Update project name in storage
+ */
+async function updateProjectName(projectId, newName) {
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    const project = projects.find(p => p.id === projectId);
+    
+    if (project) {
+      project.name = newName;
+      project.updatedAt = Date.now();
+      
+      chrome.storage.local.set({ [storageKey]: projects }, () => {
+        console.log('Project name updated');
+      });
+    }
+  });
+}
+
+/**
+ * Create delete overlay
+ */
+function createDeleteOverlay() {
+  if (document.getElementById('polish-delete-overlay')) return;
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'polish-delete-overlay';
+  overlay.setAttribute('data-polish-extension', 'true');
+  overlay.className = 'polish-delete-overlay hidden';
+  
+  overlay.innerHTML = `
+    <div class="polish-delete-content">
+      <button class="polish-delete-btn" id="polish-delete-project-btn">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5.5 4V2.5C5.5 1.67 6.17 1 7 1h2c.83 0 1.5.67 1.5 1.5V4M7 7.5v4M9 7.5v4M3 4h10l-1 10H4L3 4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Delete
+      </button>
+    </div>
+  `;
+  
+  document.body.appendChild(overlay);
+  elements.deleteOverlay = overlay;
+  
+  const deleteBtn = document.getElementById('polish-delete-project-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      if (deleteTargetProjectId) {
+        deleteProject(deleteTargetProjectId);
+      }
+    });
+  }
+}
+
+let deleteTargetProjectId = null;
+
+/**
+ * Show delete overlay aligned to menu button
+ */
+function showDeleteOverlay(projectId, projectName, menuButton) {
+  if (!elements.deleteOverlay || !menuButton) return;
+  
+  const btnRect = menuButton.getBoundingClientRect();
+  
+  elements.deleteOverlay.style.top = `${btnRect.top}px`;
+  elements.deleteOverlay.style.left = `${btnRect.right + 8}px`;
+  
+  const deleteBtn = document.getElementById('polish-delete-project-btn');
+  if (deleteBtn) {
+    deleteBtn.setAttribute('data-project-id', projectId);
+    deleteTargetProjectId = projectId;
+  }
+  
+  elements.deleteOverlay.classList.remove('hidden');
+}
+
+/**
+ * Hide delete overlay
+ */
+function hideDeleteOverlay() {
+  if (elements.deleteOverlay) {
+    elements.deleteOverlay.classList.add('hidden');
+    deleteTargetProjectId = null;
+  }
+}
+
+/**
+ * Delete project
+ */
+async function deleteProject(projectId) {
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    const filtered = projects.filter(p => p.id !== projectId);
+    
+    chrome.storage.local.set({ [storageKey]: filtered }, () => {
+      // If deleted project was current, switch to new_project
+      if (currentProjectId === projectId) {
+        currentProjectId = null;
+        currentProjectName = 'new_project';
+        isProjectSaved = false;
+        updateProjectNameDisplay();
+        
+        // Revert to initial HTML
+        if (initialHTML) {
+          document.documentElement.outerHTML = initialHTML;
+          setTimeout(() => {
+            injectOverlay();
+            setupOverlayEventListeners();
+          }, 100);
+        }
+      }
+      
+      refreshProjectsList();
+      hideDeleteOverlay();
+      showNotification('Project deleted', 'success');
+    });
+  });
+}
+
+/**
+ * Handle Save button - save current state to project
+ */
+async function handleSaveProject() {
+  const currentHTML = document.documentElement.outerHTML;
+  
+  // Generate project ID if needed
+  if (!currentProjectId) {
+    currentProjectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+  
+  const project = {
+    id: currentProjectId,
+    name: currentProjectName,
+    html: currentHTML,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    
+    // Update or add project
+    const existingIndex = projects.findIndex(p => p.id === currentProjectId);
+    if (existingIndex >= 0) {
+      projects[existingIndex] = project;
+    } else {
+      projects.push(project);
+    }
+    
+    chrome.storage.local.set({ [storageKey]: projects }, () => {
+      isProjectSaved = true;
+      showNotification(`Project "${currentProjectName}" saved`, 'success');
+      console.log('Project saved');
+    });
+  });
+}
+
+/**
+ * Handle Discard button - revert to initial state
+ */
+function handleDiscard() {
+  if (!initialHTML) {
+    showNotification('No initial state available', 'error');
+    return;
+  }
+  
+  // Revert to initial HTML
+  document.documentElement.outerHTML = initialHTML;
+  
+  // Reset project state (but keep name)
+  isProjectSaved = false;
+  
+  // Re-initialize overlay
+  setTimeout(() => {
+    injectOverlay();
+    setupOverlayEventListeners();
+    showNotification('Changes discarded', 'success');
+  }, 100);
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // ============================================================================

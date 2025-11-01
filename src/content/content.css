@@ -182,8 +182,8 @@
   background: #dc2626;
 }
 
-/* Context selector */
-.polish-context-selector {
+/* Project selector button */
+.polish-project-selector-btn {
   padding: 6px 12px;
   border: 1px solid #d1d5db;
   border-radius: 6px;
@@ -192,11 +192,30 @@
   color: #374151;
   cursor: pointer;
   min-width: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  transition: all 0.2s;
 }
 
-.polish-context-selector:focus {
+.polish-project-selector-btn:hover {
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+
+.polish-project-selector-btn:focus {
   outline: none;
   border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+#polish-project-name-display {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Main Container */
@@ -484,6 +503,329 @@ body.polish-overlay-active::after {
 
 #polish-view-mode-toggle.polish-view-mode-active:hover {
   background: #2563eb;
+}
+
+/* Settings Overlay - Floating dropdown from Settings button */
+.polish-settings-overlay {
+  position: fixed;
+  z-index: 2147483649;
+  pointer-events: auto;
+}
+
+.polish-settings-overlay.hidden {
+  display: none;
+}
+
+.polish-settings-overlay.active {
+  display: block;
+}
+
+.polish-settings-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.1);
+  width: 300px;
+  min-width: 300px;
+  max-width: 300px;
+  overflow: hidden;
+}
+
+.polish-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.polish-settings-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.polish-settings-close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.polish-settings-close-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #374151;
+}
+
+.polish-settings-body {
+  padding: 16px;
+}
+
+.polish-settings-section {
+  margin-bottom: 16px;
+}
+
+.polish-settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.polish-settings-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.polish-settings-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.polish-settings-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.polish-settings-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.polish-settings-input-group .polish-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.polish-settings-status {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.polish-settings-status.status-success {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.polish-settings-status.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.polish-settings-status.hidden {
+  display: none;
+}
+
+/* Versions Overlay - Similar to Settings overlay */
+.polish-versions-overlay {
+  position: fixed;
+  z-index: 2147483649;
+  pointer-events: auto;
+}
+
+.polish-versions-overlay.hidden {
+  display: none;
+}
+
+.polish-versions-overlay.active {
+  display: block;
+}
+
+.polish-versions-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15), 0 4px 10px rgba(0, 0, 0, 0.1);
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  overflow: hidden;
+  max-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+.polish-versions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.polish-versions-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.polish-versions-close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.polish-versions-close-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #374151;
+}
+
+.polish-versions-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.polish-versions-current {
+  margin-bottom: 16px;
+}
+
+.polish-versions-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.polish-versions-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.polish-versions-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.polish-versions-list-container {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 16px;
+}
+
+.polish-projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.polish-project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.polish-project-item:hover {
+  background: #f3f4f6;
+}
+
+.polish-project-item.active {
+  background: #eff6ff;
+}
+
+.polish-project-item.active .polish-project-item-name {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
+.polish-project-item-name {
+  flex: 1;
+  font-size: 14px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.polish-project-item-menu {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.polish-project-item-menu:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #374151;
+}
+
+.polish-no-projects {
+  padding: 16px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+/* Delete Overlay */
+.polish-delete-overlay {
+  position: fixed;
+  z-index: 2147483650;
+  pointer-events: auto;
+}
+
+.polish-delete-overlay.hidden {
+  display: none;
+}
+
+.polish-delete-content {
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.polish-delete-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+}
+
+.polish-delete-btn:hover {
+  background: #fee2e2;
 }
 
 /* API Key Section */
