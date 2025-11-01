@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build outputs
+dist/
+build/
+*.zip
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# API Keys (NEVER commit these!)
+**/api_key.txt
+**/secrets.txt
+*.pem
+*.key
+
+# Chrome extension development
+*.crx
+*.pem
+
+# Logs
+logs/
+*.log
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Package lock files (if using npm)
+package-lock.json
+yarn.lock
+
+# Editor backup files
+*~
+.*.sw[op]

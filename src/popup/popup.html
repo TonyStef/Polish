@@ -1,0 +1,322 @@
+<!--
+  =====================================================================
+  POLISH EXTENSION - POPUP UI WIREFRAME (REFERENCE ONLY)
+  =====================================================================
+
+  ⚠️ IMPORTANT - READ THIS FIRST:
+
+  This file is a MINIMAL WIREFRAME for the UI team (cofounder).
+
+  What this file is:
+  - REFERENCE starting point for custom UI design
+  - Shows required HTML structure and element IDs
+  - Has basic styling for functional testing only
+
+  What this file is NOT:
+  - NOT the final UI design
+  - NOT meant to be beautiful (yet)
+  - NOT the finished product
+
+  For UI Team (Cofounder):
+  1. Read this file to understand structure
+  2. Read docs/DOM_CONTRACT.md for complete requirements
+  3. Replace this entire file with your custom design
+  4. Keep the exact element IDs specified below
+  5. Style however you want (colors, fonts, layout, animations)
+
+  Required Element IDs (DO NOT CHANGE THESE):
+  - #apiKeySection, #editingSection (sections)
+  - #apiKeyInput, #saveApiKeyBtn, #apiKeyStatus (API key)
+  - #toggleSelectionBtn (selection button)
+  - #selectedElementInfo, #selectedElementTag, #selectedElementSelector (element info)
+  - #modificationInput, #applyModificationBtn, #modificationStatus (modification)
+
+  Backend Logic:
+  - ALL logic is in popup.js (you don't need to touch it)
+  - popup.js reads/writes to these element IDs
+  - popup.js manages all state and messages
+  - Your UI just needs to have the right IDs
+
+  Freedom You Have:
+  ✅ Change ALL styling (colors, fonts, spacing, etc.)
+  ✅ Add animations, transitions, icons, images
+  ✅ Reorganize visual layout
+  ✅ Use any CSS framework (Tailwind, Bootstrap, etc.)
+  ✅ Add additional HTML elements for styling
+  ✅ Completely replace this file
+
+  Constraints:
+  ❌ Don't change element IDs
+  ❌ Don't change element types (input → input, button → button)
+  ❌ Keep .hidden class working (display: none)
+
+  Next Steps:
+  1. Read docs/DOM_CONTRACT.md (complete spec)
+  2. Read src/popup/README.md (what popup.js does)
+  3. Use this file as starting point
+  4. Build your custom UI design
+  5. Test with popup.js in Chrome
+
+  =====================================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polish - AI Website Editor</title>
+  <style>
+    /*
+      MINIMAL STYLING - FOR TESTING ONLY
+
+      Replace all of this CSS with your custom design.
+      This is just functional styling for backend testing.
+    */
+
+    body {
+      width: 400px;
+      min-height: 300px;
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .section {
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin: 0 0 8px 0;
+      font-weight: 600;
+    }
+
+    .tagline {
+      color: #666;
+      margin: 0 0 24px 0;
+      font-size: 13px;
+    }
+
+    input[type="password"],
+    textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+
+    input[type="password"]:focus,
+    textarea:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    button {
+      padding: 8px 16px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background: #2563eb;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    button.active {
+      background: #10b981;
+    }
+
+    button.loading {
+      background: #f59e0b;
+    }
+
+    .status {
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .status-success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .status-error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .status-loading {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .help-text {
+      color: #666;
+      font-size: 13px;
+      margin: 8px 0;
+    }
+
+    .info-box {
+      background: #f3f4f6;
+      padding: 12px;
+      border-radius: 6px;
+      margin: 16px 0;
+    }
+
+    .info-label {
+      font-size: 12px;
+      color: #666;
+      margin: 0 0 4px 0;
+    }
+
+    .info-value {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 12px;
+      color: #333;
+      margin: 0;
+    }
+
+    .link {
+      color: #3b82f6;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .link:hover {
+      text-decoration: underline;
+    }
+
+    .footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+      text-align: center;
+    }
+
+    .version {
+      font-size: 11px;
+      color: #999;
+      margin: 0;
+    }
+
+    .control-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .input-group input {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <h1>Polish</h1>
+    <p class="tagline">AI-powered website editing</p>
+  </div>
+
+  <!-- API Key Setup Section -->
+  <section id="apiKeySection" class="section">
+    <h2 style="font-size: 18px; margin: 0 0 12px 0;">API Key Setup</h2>
+    <p class="help-text">Enter your Anthropic API key to get started:</p>
+
+    <div class="input-group">
+      <input
+        type="password"
+        id="apiKeyInput"
+        placeholder="sk-ant-..."
+        autocomplete="off"
+      />
+      <button id="saveApiKeyBtn">Save</button>
+    </div>
+
+    <div id="apiKeyStatus" class="status hidden"></div>
+
+    <a href="https://console.anthropic.com/settings/keys" target="_blank" class="link">
+      Get your API key from Anthropic →
+    </a>
+  </section>
+
+  <!-- Main Editing Section -->
+  <section id="editingSection" class="section hidden">
+    <h2 style="font-size: 18px; margin: 0 0 12px 0;">Edit Page</h2>
+
+    <!-- Selection Mode Toggle -->
+    <div class="control-group">
+      <button id="toggleSelectionBtn">Select Element</button>
+      <p class="help-text">Click to enter selection mode, then click an element on the page</p>
+    </div>
+
+    <!-- Selected Element Display -->
+    <div id="selectedElementInfo" class="info-box hidden">
+      <p class="info-label">Selected element:</p>
+      <p class="info-value">
+        &lt;<span id="selectedElementTag"></span>&gt;<br>
+        <span id="selectedElementSelector"></span>
+      </p>
+    </div>
+
+    <!-- Modification Request Input -->
+    <div class="control-group">
+      <label for="modificationInput">What would you like to change?</label>
+      <textarea
+        id="modificationInput"
+        placeholder="e.g., Make this button blue and larger, Change the text to 'Click Here', Add padding and center the text..."
+        rows="4"
+        disabled
+      ></textarea>
+      <p class="help-text" style="margin-top: 4px; font-size: 12px;">Tip: Press Ctrl+Enter (Cmd+Enter on Mac) to submit</p>
+    </div>
+
+    <button id="applyModificationBtn" disabled>Apply Changes</button>
+
+    <div id="modificationStatus" class="status hidden"></div>
+  </section>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p class="version">v0.1.0 - Beta</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+/**
+ * Content Script Styles
+ * Visual feedback for element selection and notifications
+ */
+
+/* Keyframe animations for notifications */
+@keyframes slideIn {
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Polish overlay for element highlighting */
+.polish-element-overlay {
+  /* Styles are applied inline, but we can add defaults here */
+  transition: all 0.15s ease-out;
+}
+
+/* Notification styles */
+[data-polish-notification] {
+  /* Styles are applied inline, but we can define the animation here */
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Ensure all Polish elements have highest z-index */
+[data-polish-extension] {
+  z-index: 999999 !important;
+  pointer-events: auto !important;
+}
+
+/* Loading spinner for notifications */
+[data-polish-notification][data-type="loading"]::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
