@@ -260,6 +260,181 @@ import { api } from '../utils/api.js';  // ✗ Fails
 
 ---
 
+## GitHub Integration (POC)
+
+**Status:** Personal Access Token (PAT) flow - **Testing Only**
+
+### Overview
+
+Polish can now publish changes to GitHub repositories. When users click "Publish", the extension creates a new branch with:
+- `index.html` - Full HTML snapshot with modifications
+- `polish-metadata.json` - Structured change log
+- `README.md` - Instructions for developers
+
+### Architecture
+
+**Flow:**
+```
+User → Settings → Connect GitHub (PAT) → Publish Button → Service Worker → GitHub API → New Branch
+```
+
+**Components:**
+- `src/utils/github-api.js` - GitHub REST API wrapper (no ES6 exports)
+- `src/content/content.js` - Settings UI, publish logic, metadata generation
+- `src/background/service-worker.js` - GitHub API message handlers
+
+**Storage Keys:**
+```javascript
+polish_github_token        // PAT (password field, masked)
+polish_github_repo         // "owner/repo" format
+polish_github_base_branch  // Default: "main"
+polish_github_username     // Cached from validation
+polish_github_repo_name    // Cached from validation
+polish_github_connected    // Boolean connection status
+```
+
+### Security Model
+
+**Current (POC):**
+- Users create fine-grained PAT with `repo→contents` (read/write) permissions
+- Token stored in `chrome.storage.local` (encrypted by Chrome at rest)
+- Token never logged, masked in UI
+- Validated on save via GitHub API `/user` endpoint
+
+**Required Token Permissions:**
+- `repo` → `contents` (read/write) - **Minimum required**
+- Optional: `pull_requests` (for future PR creation)
+
+**Security Best Practices Implemented:**
+- Token format validation (`ghp_*` or `github_pat_*` prefix)
+- HTTPS-only GitHub API calls
+- Token transmitted in `Authorization` header (never in URL)
+- Input sanitization for repo owner/name
+- Error messages don't expose sensitive data
+
+### User Flow
+
+1. **Settings → GitHub Integration:**
+   - User creates PAT at `https://github.com/settings/tokens`
+   - Pastes token, enters `owner/repo`, selects base branch
+   - Clicks "Connect GitHub"
+   - Extension validates via GitHub API
+   - Saves credentials to `chrome.storage.local`
+
+2. **Publish:**
+   - User modifies page via Polish
+   - Clicks "Publish" button
+   - Extension generates branch name: `polish-changes-{timestamp}`
+   - Creates branch from base
+   - Commits 3 files (HTML, metadata, README)
+   - Shows success modal with GitHub branch link
+
+3. **Disconnect:**
+   - User clicks "Disconnect" in Settings
+   - Clears all GitHub credentials from storage
+
+### GitHub API Calls
+
+**Validation:**
+```javascript
+GET /user                           // Validate token
+GET /repos/{owner}/{repo}           // Validate repo access
+```
+
+**Publishing:**
+```javascript
+GET /repos/{owner}/{repo}/git/refs/heads/{base}  // Get base SHA
+POST /repos/{owner}/{repo}/git/refs              // Create branch
+PUT /repos/{owner}/{repo}/contents/{path}        // Commit files (3x)
+```
+
+### Error Handling
+
+**Custom Error Classes:**
+- `GitHubAuthError` - Invalid/expired token (401)
+- `GitHubNotFoundError` - Repo not found (404)
+- `GitHubPermissionError` - Insufficient permissions (403)
+- `GitHubRateLimitError` - Rate limit exceeded (403 + headers)
+
+**User-Friendly Messages:**
+- "Authentication failed. Please check your token."
+- "Repository not found. Verify owner/repo and token permissions."
+- "Access denied. Ensure your PAT has repo→contents (read/write) permissions."
+- "Rate limit exceeded. Resets at {time}."
+
+### Limitations (PAT Approach)
+
+**Current Constraints:**
+- ⚠️ **Testing only** - Users must manually create/revoke PATs
+- Token stored locally (Chrome encrypts, but not ideal for production)
+- No automatic token refresh
+- No OAuth consent flow
+- Users might grant excessive permissions
+- Static HTML export only (not source file editing)
+
+### Future Roadmap
+
+**Production Implementation (GitHub App + OAuth):**
+
+1. Register GitHub App with Polish organization
+2. Implement OAuth flow:
+   - User clicks "Connect GitHub" → Backend OAuth endpoint
+   - User authorizes app installation → Callback with installation ID
+   - Backend stores installation tokens (server-side)
+   - Extension communicates via backend API
+
+3. Benefits:
+   - No user-managed tokens
+   - Granular permissions (repo-specific)
+   - Automatic token refresh
+   - Professional UX
+   - Audit trail
+
+**Backend Requirements:**
+- Node.js/Express server (or similar)
+- Endpoints: `/auth/install`, `/api/publish`, `/webhooks/github`
+- Database for user → installation ID mapping
+- GitHub App credentials (private key, app ID)
+
+**Migration Path:**
+- Keep PAT as "developer mode" option
+- Add OAuth as "recommended" flow
+- Both use same storage schema
+- Gradual migration of users
+
+### Message Types
+
+**New Message Types:**
+```javascript
+VALIDATE_GITHUB    // Content → Service Worker (validate token + repo)
+PUBLISH_TO_GITHUB  // Content → Service Worker (create branch + commit files)
+```
+
+**Message Handlers:**
+- `handleValidateGitHub()` - Uses `validateConnection()` from github-api.js
+- `handlePublishToGitHub()` - Uses `getBranchRef()`, `createBranch()`, `createOrUpdateFile()`
+
+### Testing
+
+**Manual Test Checklist:**
+- [ ] Connect with valid PAT → Success
+- [ ] Connect with invalid token → "Authentication failed"
+- [ ] Connect to non-existent repo → "Repository not found"
+- [ ] Connect without permissions → "Access denied"
+- [ ] Publish creates branch with 3 files
+- [ ] Publish twice creates unique branch names
+- [ ] Disconnect clears all credentials
+- [ ] Success message auto-hides after 3s
+- [ ] Error messages persist until dismissed
+- [ ] Branch link opens in new tab
+
+**Rate Limiting:**
+- GitHub: 5,000 requests/hour (authenticated)
+- Polish uses ~4 requests per publish
+- Monitor via `X-RateLimit-Remaining` header
+
+---
+
 ## Known Limitations (Intentional for POC)
 
 - No persistence (changes reset on page refresh)

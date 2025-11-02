@@ -5,6 +5,7 @@
 
 // Import API utilities (must not use ES6 exports in service workers)
 importScripts('../utils/api.js');
+importScripts('../utils/github-api.js');
 
 /**
  * Message listener - handles messages from content script and popup
@@ -31,6 +32,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'PERFORM_DOM_TASK':
       handlePerformDOMTask(message.data, sendResponse);
+      return true; // Keep channel open for async response
+
+    case 'VALIDATE_GITHUB':
+      handleValidateGitHub(message.token, message.repo, sendResponse);
+      return true; // Keep channel open for async response
+
+    case 'PUBLISH_TO_GITHUB':
+      handlePublishToGitHub(message.data, sendResponse);
       return true; // Keep channel open for async response
 
     case 'PING':
@@ -291,6 +300,89 @@ chrome.action.onClicked.addListener(async (tab) => {
   
   await sendToggleMessage();
 });
+
+/**
+ * Handle GitHub validation request
+ * @param {string} token - GitHub Personal Access Token
+ * @param {string} repo - Repository in format "owner/repo"
+ * @param {Function} sendResponse - Callback to send response
+ */
+async function handleValidateGitHub(token, repo, sendResponse) {
+  try {
+    console.log('Validating GitHub connection...');
+
+    // Use validateConnection from github-api.js
+    const result = await validateConnection(token, repo);
+
+    console.log('GitHub validation result:', result);
+    sendResponse(result);
+
+  } catch (error) {
+    console.error('Error validating GitHub:', error);
+    sendResponse({
+      valid: false,
+      error: error.message || 'Failed to validate GitHub connection',
+      errorType: error.name
+    });
+  }
+}
+
+/**
+ * Handle publish to GitHub request
+ * @param {Object} data - Request data with token, repo, branch info, and files
+ * @param {Function} sendResponse - Callback to send response
+ */
+async function handlePublishToGitHub(data, sendResponse) {
+  try {
+    const { token, repo, baseBranch, branchName, files } = data;
+
+    if (!token || !repo || !branchName || !files) {
+      throw new Error('Missing required data for GitHub publish');
+    }
+
+    console.log('Publishing to GitHub:', { repo, baseBranch, branchName });
+
+    // Get base branch SHA
+    const baseRef = await getBranchRef(token, repo, baseBranch);
+    const baseSha = baseRef.object.sha;
+
+    // Create new branch
+    await createBranch(token, repo, branchName, baseSha);
+    console.log('Branch created:', branchName);
+
+    // Commit all files
+    const commitResults = [];
+    for (const file of files) {
+      const result = await createOrUpdateFile(
+        token,
+        repo,
+        file.path,
+        file.content,
+        file.message || `Polish: Add ${file.path}`,
+        branchName
+      );
+      commitResults.push(result);
+      console.log('File committed:', file.path);
+    }
+
+    const branchUrl = `https://github.com/${repo}/tree/${branchName}`;
+
+    sendResponse({
+      success: true,
+      branchName,
+      branchUrl,
+      commitResults
+    });
+
+  } catch (error) {
+    console.error('Error publishing to GitHub:', error);
+    sendResponse({
+      success: false,
+      error: error.message || 'Failed to publish to GitHub',
+      errorType: error.name
+    });
+  }
+}
 
 /**
  * Installation handler

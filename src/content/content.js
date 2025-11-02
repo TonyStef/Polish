@@ -17,6 +17,26 @@ let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
 let phoneModeViewportWrapper = null; // Inner viewport wrapper for phone mode
 
+// GitHub Integration State
+const githubState = {
+  token: null,
+  repo: null,
+  baseBranch: 'main',
+  username: null,
+  repoName: null,
+  connected: false
+};
+
+// Storage keys for GitHub integration
+const GITHUB_STORAGE_KEYS = {
+  TOKEN: 'polish_github_token',
+  REPO: 'polish_github_repo',
+  BASE_BRANCH: 'polish_github_base_branch',
+  USERNAME: 'polish_github_username',
+  REPO_NAME: 'polish_github_repo_name',
+  CONNECTED: 'polish_github_connected'
+};
+
 // Versioning state
 let currentProjectId = null; // Current project ID
 let currentProjectName = 'new_project'; // Current project name
@@ -674,11 +694,11 @@ function setupOverlayEventListeners() {
   }
 
   // Save button - save current state to project
-  // Publish button - placeholder (no functionality)
+  // Publish button - publish to GitHub
   if (elements.publishBtn) {
-    elements.publishBtn.addEventListener('click', (e) => {
+    elements.publishBtn.addEventListener('click', async (e) => {
       e.preventDefault();
-      console.log('Publish clicked (placeholder - no functionality)');
+      await handlePublishToGitHub();
     });
   }
   
@@ -2527,10 +2547,54 @@ function createSettingsOverlay() {
           <div id="polish-settings-api-key-status" class="polish-settings-status hidden"></div>
         </div>
         <div class="polish-settings-section">
-          <label class="polish-settings-label">GitHub</label>
-          <button id="polish-settings-connect-github-btn" class="polish-btn polish-btn-primary polish-btn-text">
-            Connect GitHub
-          </button>
+          <label class="polish-settings-label">GitHub Integration</label>
+          <div class="polish-settings-warning" style="background-color: #fef3c7; border-left: 3px solid #f59e0b; padding: 8px; margin-bottom: 12px; font-size: 12px; line-height: 1.4; color: #92400e;">
+            ⚠️ <strong>Testing Only:</strong> Create a fine-grained PAT with <code style="background: #fbbf24; padding: 2px 4px; border-radius: 2px;">repo→contents</code> (read/write) permissions. Revoke token from GitHub when done.
+          </div>
+          <div id="polish-github-connected-info" class="polish-settings-info hidden" style="background-color: #d1fae5; border-left: 3px solid #10b981; padding: 8px; margin-bottom: 12px; font-size: 12px; line-height: 1.4; color: #065f46;">
+            ✓ Connected as <strong id="polish-github-username"></strong> → <strong id="polish-github-repo-name"></strong>
+          </div>
+          <div id="polish-github-form">
+            <div class="polish-settings-input-group" style="margin-bottom: 10px;">
+              <label for="polish-github-token-input" style="display: block; margin-bottom: 4px; font-size: 13px;">Personal Access Token</label>
+              <input
+                type="password"
+                id="polish-github-token-input"
+                class="polish-settings-input"
+                placeholder="ghp_..."
+                autocomplete="off"
+              />
+            </div>
+            <div class="polish-settings-input-group" style="margin-bottom: 10px;">
+              <label for="polish-github-repo-input" style="display: block; margin-bottom: 4px; font-size: 13px;">Repository (owner/repo)</label>
+              <input
+                type="text"
+                id="polish-github-repo-input"
+                class="polish-settings-input"
+                placeholder="username/my-website"
+                autocomplete="off"
+              />
+            </div>
+            <div class="polish-settings-input-group" style="margin-bottom: 12px;">
+              <label for="polish-github-branch-input" style="display: block; margin-bottom: 4px; font-size: 13px;">Base Branch</label>
+              <input
+                type="text"
+                id="polish-github-branch-input"
+                class="polish-settings-input"
+                value="main"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+          <div class="polish-settings-button-group" style="display: flex; gap: 8px;">
+            <button id="polish-settings-connect-github-btn" class="polish-btn polish-btn-primary polish-btn-text">
+              Connect GitHub
+            </button>
+            <button id="polish-settings-disconnect-github-btn" class="polish-btn polish-btn-secondary polish-btn-text hidden" style="background-color: #ef4444; color: white;">
+              Disconnect
+            </button>
+          </div>
+          <div id="polish-github-status" class="polish-settings-status hidden"></div>
         </div>
       </div>
     </div>
@@ -2541,6 +2605,18 @@ function createSettingsOverlay() {
   elements.settingsApiKeyInput = document.getElementById('polish-settings-api-key-input');
   elements.settingsSaveApiKeyBtn = document.getElementById('polish-settings-save-api-key-btn');
   elements.settingsApiKeyStatus = document.getElementById('polish-settings-api-key-status');
+
+  // GitHub elements
+  elements.githubTokenInput = document.getElementById('polish-github-token-input');
+  elements.githubRepoInput = document.getElementById('polish-github-repo-input');
+  elements.githubBranchInput = document.getElementById('polish-github-branch-input');
+  elements.githubConnectBtn = document.getElementById('polish-settings-connect-github-btn');
+  elements.githubDisconnectBtn = document.getElementById('polish-settings-disconnect-github-btn');
+  elements.githubStatus = document.getElementById('polish-github-status');
+  elements.githubConnectedInfo = document.getElementById('polish-github-connected-info');
+  elements.githubUsername = document.getElementById('polish-github-username');
+  elements.githubRepoName = document.getElementById('polish-github-repo-name');
+  elements.githubForm = document.getElementById('polish-github-form');
   
   // Event listeners
   const closeBtn = document.getElementById('polish-settings-close');
@@ -2566,6 +2642,24 @@ function createSettingsOverlay() {
       }
     });
   }
+
+  // GitHub event listeners
+  if (elements.githubConnectBtn) {
+    elements.githubConnectBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleConnectGitHub();
+    });
+  }
+
+  if (elements.githubDisconnectBtn) {
+    elements.githubDisconnectBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleDisconnectGitHub();
+    });
+  }
+
+  // Load existing GitHub credentials if any
+  loadGitHubCredentials();
 }
 
 /**
@@ -2657,16 +2751,522 @@ function toggleSettingsOverlay() {
  */
 function showSettingsApiKeyStatus(message, type) {
   if (!elements.settingsApiKeyStatus) return;
-  
+
   elements.settingsApiKeyStatus.textContent = message;
   elements.settingsApiKeyStatus.className = `polish-settings-status status-${type}`;
   elements.settingsApiKeyStatus.classList.remove('hidden');
-  
+
   if (type === 'success') {
     setTimeout(() => {
       elements.settingsApiKeyStatus.classList.add('hidden');
     }, 3000);
   }
+}
+
+/**
+ * Show GitHub status message
+ */
+function showGitHubStatus(message, type) {
+  if (!elements.githubStatus) return;
+
+  elements.githubStatus.textContent = message;
+  elements.githubStatus.className = `polish-settings-status status-${type}`;
+  elements.githubStatus.classList.remove('hidden');
+
+  if (type === 'success') {
+    setTimeout(() => {
+      elements.githubStatus.classList.add('hidden');
+    }, 3000);
+  }
+}
+
+/**
+ * Save GitHub credentials to storage
+ */
+async function saveGitHubCredentials(token, repo, baseBranch, username, repoName) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({
+      [GITHUB_STORAGE_KEYS.TOKEN]: token,
+      [GITHUB_STORAGE_KEYS.REPO]: repo,
+      [GITHUB_STORAGE_KEYS.BASE_BRANCH]: baseBranch,
+      [GITHUB_STORAGE_KEYS.USERNAME]: username,
+      [GITHUB_STORAGE_KEYS.REPO_NAME]: repoName,
+      [GITHUB_STORAGE_KEYS.CONNECTED]: true
+    }, () => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Load GitHub credentials from storage
+ */
+async function loadGitHubCredentials() {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(Object.values(GITHUB_STORAGE_KEYS), (result) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+        return;
+      }
+
+      const credentials = {
+        token: result[GITHUB_STORAGE_KEYS.TOKEN] || null,
+        repo: result[GITHUB_STORAGE_KEYS.REPO] || null,
+        baseBranch: result[GITHUB_STORAGE_KEYS.BASE_BRANCH] || 'main',
+        username: result[GITHUB_STORAGE_KEYS.USERNAME] || null,
+        repoName: result[GITHUB_STORAGE_KEYS.REPO_NAME] || null,
+        connected: result[GITHUB_STORAGE_KEYS.CONNECTED] || false
+      };
+
+      // Update state
+      Object.assign(githubState, credentials);
+
+      // Update UI if connected
+      if (credentials.connected && elements.githubUsername && elements.githubRepoName) {
+        updateGitHubUI(true);
+      }
+
+      resolve(credentials);
+    });
+  });
+}
+
+/**
+ * Clear GitHub credentials from storage
+ */
+async function clearGitHubCredentials() {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(Object.values(GITHUB_STORAGE_KEYS), () => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Update GitHub UI based on connection status
+ */
+function updateGitHubUI(connected) {
+  if (!elements.githubConnectBtn || !elements.githubDisconnectBtn) return;
+
+  if (connected) {
+    // Hide form, show connected info
+    if (elements.githubForm) elements.githubForm.classList.add('hidden');
+    if (elements.githubConnectBtn) elements.githubConnectBtn.classList.add('hidden');
+    if (elements.githubDisconnectBtn) elements.githubDisconnectBtn.classList.remove('hidden');
+    if (elements.githubConnectedInfo) elements.githubConnectedInfo.classList.remove('hidden');
+
+    // Update connected info
+    if (elements.githubUsername) elements.githubUsername.textContent = githubState.username || '';
+    if (elements.githubRepoName) elements.githubRepoName.textContent = githubState.repo || '';
+  } else {
+    // Show form, hide connected info
+    if (elements.githubForm) elements.githubForm.classList.remove('hidden');
+    if (elements.githubConnectBtn) elements.githubConnectBtn.classList.remove('hidden');
+    if (elements.githubDisconnectBtn) elements.githubDisconnectBtn.classList.add('hidden');
+    if (elements.githubConnectedInfo) elements.githubConnectedInfo.classList.add('hidden');
+  }
+}
+
+/**
+ * Handle Connect GitHub button click
+ */
+async function handleConnectGitHub() {
+  if (!elements.githubTokenInput || !elements.githubRepoInput) return;
+
+  const token = elements.githubTokenInput.value.trim();
+  const repo = elements.githubRepoInput.value.trim();
+  const baseBranch = elements.githubBranchInput?.value.trim() || 'main';
+
+  // Validate inputs
+  if (!token) {
+    showGitHubStatus('Please enter a GitHub Personal Access Token', 'error');
+    return;
+  }
+
+  if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
+    showGitHubStatus('Invalid token format. Must start with "ghp_" or "github_pat_"', 'error');
+    return;
+  }
+
+  if (!repo) {
+    showGitHubStatus('Please enter a repository (owner/repo)', 'error');
+    return;
+  }
+
+  if (!repo.includes('/')) {
+    showGitHubStatus('Repository must be in format "owner/repo"', 'error');
+    return;
+  }
+
+  // Show loading state
+  if (elements.githubConnectBtn) {
+    elements.githubConnectBtn.disabled = true;
+    elements.githubConnectBtn.textContent = 'Connecting...';
+  }
+  showGitHubStatus('Validating GitHub connection...', 'info');
+
+  try {
+    // Validate connection via service worker (which has access to github-api.js)
+    const response = await chrome.runtime.sendMessage({
+      type: 'VALIDATE_GITHUB',
+      token,
+      repo
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    if (!response.valid) {
+      throw new Error(response.message || 'Failed to validate GitHub connection');
+    }
+
+    // Save credentials
+    await saveGitHubCredentials(
+      token,
+      repo,
+      baseBranch,
+      response.username,
+      response.repoName
+    );
+
+    // Update UI
+    updateGitHubUI(true);
+    showGitHubStatus('✓ GitHub connected successfully!', 'success');
+
+    // Clear input fields for security
+    if (elements.githubTokenInput) elements.githubTokenInput.value = '';
+    if (elements.githubRepoInput) elements.githubRepoInput.value = '';
+
+  } catch (error) {
+    console.error('GitHub connection error:', error);
+
+    let errorMessage = 'Failed to connect to GitHub';
+
+    if (error.message.includes('Authentication failed') || error.message.includes('Invalid or expired token')) {
+      errorMessage = 'Authentication failed. Please check your token.';
+    } else if (error.message.includes('not found') || error.message.includes('no access')) {
+      errorMessage = 'Repository not found. Verify owner/repo and token permissions.';
+    } else if (error.message.includes('permissions') || error.message.includes('Insufficient permissions')) {
+      errorMessage = 'Access denied. Ensure your PAT has repo→contents (read/write) permissions.';
+    } else if (error.message.includes('Rate limit')) {
+      errorMessage = error.message; // Use the detailed rate limit message
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+
+    showGitHubStatus(errorMessage, 'error');
+  } finally {
+    // Reset button state
+    if (elements.githubConnectBtn) {
+      elements.githubConnectBtn.disabled = false;
+      elements.githubConnectBtn.textContent = 'Connect GitHub';
+    }
+  }
+}
+
+/**
+ * Handle Disconnect GitHub button click
+ */
+async function handleDisconnectGitHub() {
+  try {
+    // Clear storage
+    await clearGitHubCredentials();
+
+    // Reset state
+    githubState.token = null;
+    githubState.repo = null;
+    githubState.baseBranch = 'main';
+    githubState.username = null;
+    githubState.repoName = null;
+    githubState.connected = false;
+
+    // Update UI
+    updateGitHubUI(false);
+    showGitHubStatus('GitHub disconnected', 'success');
+
+  } catch (error) {
+    console.error('Error disconnecting GitHub:', error);
+    showGitHubStatus('Failed to disconnect GitHub', 'error');
+  }
+}
+
+/**
+ * Generate polish-metadata.json content
+ */
+function generateMetadata() {
+  const currentProject = getCurrentProjectFromState();
+  if (!currentProject) {
+    return null;
+  }
+
+  const latestVersion = currentProject.versions[currentProject.versions.length - 1];
+  const changes = extractChangesFromChatHistory(latestVersion.chatMessages || []);
+
+  const metadata = {
+    created_at: new Date().toISOString(),
+    source_url: window.location.href,
+    project_name: currentProject.name || 'Untitled Project',
+    branch: `polish-changes-${Date.now()}`,
+    changes: changes,
+    chat_summary: summarizeChatHistory(latestVersion.chatMessages || []),
+    notes: "Generated via Polish browser extension"
+  };
+
+  return JSON.stringify(metadata, null, 2);
+}
+
+/**
+ * Extract changes from chat history
+ */
+function extractChangesFromChatHistory(chatMessages) {
+  const changes = [];
+
+  // Simplified extraction - in a real implementation, this would parse modifications
+  for (const message of chatMessages) {
+    if (message.role === 'user') {
+      changes.push({
+        type: 'modification',
+        description: message.content.substring(0, 100),
+        timestamp: message.timestamp || Date.now()
+      });
+    }
+  }
+
+  return changes;
+}
+
+/**
+ * Summarize chat history
+ */
+function summarizeChatHistory(chatMessages) {
+  if (!chatMessages || chatMessages.length === 0) {
+    return 'No chat history available';
+  }
+
+  const userMessages = chatMessages.filter(m => m.role === 'user');
+  if (userMessages.length === 0) {
+    return 'No user modifications recorded';
+  }
+
+  if (userMessages.length === 1) {
+    return userMessages[0].content;
+  }
+
+  return `${userMessages.length} modifications made: ${userMessages.slice(0, 3).map(m => m.content.substring(0, 50)).join(', ')}...`;
+}
+
+/**
+ * Generate README.md content for GitHub
+ */
+function generateReadme(branchName) {
+  const timestamp = new Date().toISOString();
+  const sourceUrl = window.location.href;
+
+  return `# Polish Export
+
+- **Source page:** ${sourceUrl}
+- **Generated:** ${timestamp}
+- **Branch:** ${branchName}
+
+## Files
+- \`index.html\` — Static snapshot with applied changes
+- \`polish-metadata.json\` — Structured change log
+
+## Next Steps
+1. Review \`index.html\` and replicate changes in the real codebase
+2. Merge this branch or cherry-pick into your workflow
+3. Revoke the PAT if you created it for this test
+
+> Generated automatically by the Polish browser extension.
+
+## About Polish
+Polish is an AI-powered browser extension that allows you to modify website elements using natural language commands powered by Claude AI.
+
+**Note:** This is a static export and may not reflect the dynamic behavior of your application. Use this as a reference for implementing changes in your source code.
+`;
+}
+
+/**
+ * Get current project from state
+ */
+function getCurrentProjectFromState() {
+  // Get from URL-specific storage
+  const urlKey = `polish_projects_${currentUrl}`;
+
+  // This would normally be async, but for simplicity we'll access the cached project data
+  // In the actual publish flow, we'll use proper async access
+  return {
+    name: currentProjectName,
+    versions: [{
+      html: document.documentElement.outerHTML,
+      chatMessages: [] // Will be populated from actual chat history
+    }]
+  };
+}
+
+/**
+ * Handle Publish to GitHub button click
+ */
+async function handlePublishToGitHub() {
+  // Check if GitHub is connected
+  if (!githubState.connected || !githubState.token || !githubState.repo) {
+    showNotification('Please connect GitHub first. Go to Settings → GitHub Integration.', 'error');
+
+    // Open settings overlay to help user
+    showSettingsOverlay();
+    return;
+  }
+
+  // Show publishing state
+  if (elements.publishBtn) {
+    elements.publishBtn.disabled = true;
+    elements.publishBtn.textContent = 'Publishing...';
+  }
+
+  try {
+    // Generate branch name
+    const branchName = `polish-changes-${Date.now()}`;
+
+    // Get current HTML
+    const currentHTML = document.documentElement.outerHTML;
+
+    // Generate metadata
+    const metadataContent = generateMetadata() || '{}';
+
+    // Generate README
+    const readmeContent = generateReadme(branchName);
+
+    // Prepare files to commit
+    const files = [
+      {
+        path: 'index.html',
+        content: currentHTML,
+        message: 'Polish: Add modified HTML snapshot'
+      },
+      {
+        path: 'polish-metadata.json',
+        content: metadataContent,
+        message: 'Polish: Add metadata'
+      },
+      {
+        path: 'README.md',
+        content: readmeContent,
+        message: 'Polish: Add README'
+      }
+    ];
+
+    showNotification('Creating branch and committing files...', 'info');
+
+    // Send to service worker to publish
+    const response = await chrome.runtime.sendMessage({
+      type: 'PUBLISH_TO_GITHUB',
+      data: {
+        token: githubState.token,
+        repo: githubState.repo,
+        baseBranch: githubState.baseBranch || 'main',
+        branchName,
+        files
+      }
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to publish to GitHub');
+    }
+
+    // Show success message with link
+    const branchUrl = response.branchUrl;
+    showPublishSuccessModal(branchUrl, branchName);
+
+  } catch (error) {
+    console.error('Error publishing to GitHub:', error);
+
+    let errorMessage = 'Failed to publish to GitHub';
+
+    if (error.message.includes('Authentication') || error.message.includes('401')) {
+      errorMessage = 'Authentication failed. Please reconnect GitHub in Settings.';
+    } else if (error.message.includes('not found') || error.message.includes('404')) {
+      errorMessage = 'Repository not found. Please check Settings → GitHub.';
+    } else if (error.message.includes('permissions') || error.message.includes('403')) {
+      errorMessage = 'Access denied. Check your GitHub token permissions.';
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+
+    showNotification(errorMessage, 'error');
+  } finally {
+    // Reset button state
+    if (elements.publishBtn) {
+      elements.publishBtn.disabled = false;
+      elements.publishBtn.textContent = 'Publish';
+    }
+  }
+}
+
+/**
+ * Show publish success modal with branch link
+ */
+function showPublishSuccessModal(branchUrl, branchName) {
+  // Create modal overlay
+  const modal = document.createElement('div');
+  modal.setAttribute('data-polish-extension', 'true');
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000000;
+  `;
+
+  modal.innerHTML = `
+    <div style="background: white; border-radius: 8px; padding: 24px; max-width: 500px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+      <h2 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #10b981;">
+        ✓ Successfully Published to GitHub!
+      </h2>
+      <p style="margin: 0 0 12px 0; color: #374151; line-height: 1.5;">
+        Your changes have been committed to branch:
+      </p>
+      <p style="margin: 0 0 16px 0; font-family: monospace; background: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-size: 13px; word-break: break-all;">
+        ${branchName}
+      </p>
+      <div style="display: flex; gap: 8px;">
+        <a href="${branchUrl}" target="_blank" style="flex: 1; background: #3b82f6; color: white; text-decoration: none; padding: 10px 16px; border-radius: 6px; text-align: center; font-weight: 500;">
+          View on GitHub →
+        </a>
+        <button id="polish-close-success-modal" style="background: #e5e7eb; color: #374151; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 500; cursor: pointer;">
+          Close
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Close on button click
+  const closeBtn = modal.querySelector('#polish-close-success-modal');
+  closeBtn.addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close on overlay click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 /**
