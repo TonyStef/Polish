@@ -130,7 +130,7 @@ Return ONLY a valid JSON object:
 }
 ```
 
-**Claude model used**: `claude-3-5-sonnet-20241022`
+**Claude model used**: `claude-sonnet-4-5-20250929`
 
 **Temperature**: 0.3 (lower for consistent code generation)
 

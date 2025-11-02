@@ -1,6 +1,6 @@
 # Polish - AI-Powered Website Editor
 
-**Chrome extension that lets you modify any website using natural language and Claude AI**
+**Chrome extension that lets you modify YOUR website using natural language and Claude AI**
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/yourusername/polish)
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/yourusername/polish)
