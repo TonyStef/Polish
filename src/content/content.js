@@ -7,12 +7,11 @@ let isSelectionMode = false;
 let currentlyHighlightedElement = null;
 let selectedElement = null;
 let overlayElement = null;
-let selectionContext = null; // Track which document owns the current selection overlay
 let polishOverlayWrapper = null;
 let isOverlayVisible = false;
 
 // State management
-let currentMode = null; // 'edit', 'chat', or null (auto mode - default)
+let currentMode = null; // 'edit', 'chat', or null (agent mode - default)
 let viewMode = 'desktop'; // 'desktop' or 'phone'
 let apiKey = null;
 let phoneModeWrapper = null; // Wrapper div for phone mode
@@ -21,9 +20,9 @@ let phoneModeViewportWrapper = null; // Inner viewport wrapper for phone mode
 // Versioning state
 let currentProjectId = null; // Current project ID
 let currentProjectName = 'new_project'; // Current project name
-let initialHTML = null; // Initial HTML state for discard functionality
-let isProjectSaved = false; // Whether current project is saved
+let initialHTML = null; // Initial HTML state
 let currentUrl = null; // Current website URL (normalized)
+let currentVersionIndex = null; // Current version index within the project (null = latest version)
 
 // Live Website constants
 const LIVE_WEBSITE_ID = '_live_website_';
@@ -35,8 +34,6 @@ const elements = {
   closeBtn: null,
   settingsBtn: null,
   shareFeedbackLink: null,
-  discardBtn: null,
-  saveBtn: null,
   publishBtn: null,
   backBtn: null,
   forwardBtn: null,
@@ -94,7 +91,7 @@ async function init() {
   await initializeVersioning();
 
   // NOW inject persistent overlay (after projects are loaded)
-  injectOverlay();
+  await injectOverlay();
 
   // Load API key (async, can happen in parallel)
   loadApiKey();
@@ -167,8 +164,6 @@ function createOverlayManually() {
         </button>
       </div>
       <div class="polish-top-bar-right">
-        <button id="polish-discard-btn" class="polish-btn polish-btn-text polish-btn-danger">Discard</button>
-        <button id="polish-save-btn" class="polish-btn polish-btn-text polish-btn-primary">Save</button>
         <button id="polish-publish-btn" class="polish-btn polish-btn-text polish-btn-primary">Publish</button>
       </div>
     </div>
@@ -232,8 +227,6 @@ function cacheOverlayElements() {
   elements.closeBtn = document.getElementById('polish-close-btn');
   elements.settingsBtn = document.getElementById('polish-settings-btn');
   elements.shareFeedbackLink = document.getElementById('polish-share-feedback-link');
-  elements.discardBtn = document.getElementById('polish-discard-btn');
-  elements.saveBtn = document.getElementById('polish-save-btn');
   elements.publishBtn = document.getElementById('polish-publish-btn');
   elements.backBtn = document.getElementById('polish-back-btn');
   elements.forwardBtn = document.getElementById('polish-forward-btn');
@@ -291,16 +284,29 @@ function normalizeUrl(url) {
 async function initializeVersioning() {
   // Normalize current URL
   currentUrl = normalizeUrl(window.location.href);
-
+  
   // Store initial HTML state (only once per page load)
-  // This is the clean page state WITHOUT Polish elements for Discard functionality
+  // Clone and sanitize to exclude Polish UI elements
   if (!initialHTML) {
-    initialHTML = document.documentElement.outerHTML;
+    const clonedDoc = document.documentElement.cloneNode(true);
+
+    // Remove Polish extension elements from clone
+    clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+    const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+    if (overlayWrapper) {
+      overlayWrapper.remove();
+    }
+
+    // Capture clean HTML
+    initialHTML = clonedDoc.outerHTML;
   }
+  
+  // Ensure Live Website exists in storage
+  await ensureLiveWebsiteExists();
   
   // Load projects for this URL
   await loadProjectsForUrl();
-
+  
   // Update project name display
   updateProjectNameDisplay();
 }
@@ -355,55 +361,157 @@ async function getLiveWebsiteHTML() {
 }
 
 /**
- * Load projects for current URL
+ * Save active project ID for current URL
  */
-async function loadProjectsForUrl() {
+async function saveActiveProject() {
+  if (!currentUrl) return;
+  
+  // Don't save if currentProjectId is null (unsaved "new_project")
+  // Only save when we have an actual project or Live Website
+  if (currentProjectId === null) {
+    return;
+  }
+  
   return new Promise((resolve) => {
-    const storageKey = `polish_projects_${currentUrl}`;
-    chrome.storage.local.get([storageKey], (result) => {
-      const projects = result[storageKey] || [];
-      
-      // If no projects exist, create default "new_project" (unsaved)
-      // Start from Live Website state
-      if (projects.length === 0) {
-        currentProjectId = null;
-        currentProjectName = 'new_project';
-        isProjectSaved = false;
-        // Don't load HTML - stay with initial state
+    const storageKey = `polish_active_project_${currentUrl}`;
+    const activeProjectData = {
+      projectId: currentProjectId,
+      projectName: currentProjectName,
+      versionIndex: currentVersionIndex // Also save the current version index
+    };
+    
+    chrome.storage.local.set({ [storageKey]: activeProjectData }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to save active project:', chrome.runtime.lastError);
       } else {
-        // Load first project by default (or find active one)
-        const firstProject = projects[0];
-        currentProjectId = firstProject.id;
-        currentProjectName = firstProject.name;
-        isProjectSaved = true;
-        
-        // Only load HTML if it's not Live Website
-        if (!isLiveWebsite(firstProject.id)) {
-          loadProjectHTML(firstProject);
-        } else {
-          // Load Live Website HTML
-          getLiveWebsiteHTML().then(html => {
-            if (html && html !== document.documentElement.outerHTML) {
-              document.documentElement.outerHTML = html;
-              setTimeout(() => {
-                injectOverlay();
-                setupOverlayEventListeners();
-                cacheOverlayElements();
-                updateUIForState();
-              }, 100);
-            }
-          });
-        }
+        console.log(`Saved active project: ${currentProjectName} (${currentProjectId}), version: ${currentVersionIndex !== null ? currentVersionIndex : 'latest'}`);
       }
-      
       resolve();
     });
   });
 }
 
 /**
- * Replace body content while preserving Polish overlay and extension elements
- * This prevents destroying the overlay wrapper and losing cached element references
+ * Load active project ID for current URL
+ */
+async function loadActiveProject() {
+  if (!currentUrl) return null;
+  
+  return new Promise((resolve) => {
+    const storageKey = `polish_active_project_${currentUrl}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      if (result[storageKey]) {
+        resolve(result[storageKey]);
+      } else {
+        resolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * Load projects for current URL
+ */
+async function loadProjectsForUrl() {
+  return new Promise(async (resolve) => {
+    const storageKey = `polish_projects_${currentUrl}`;
+    chrome.storage.local.get([storageKey], async (result) => {
+      const projects = result[storageKey] || [];
+      
+      // Try to load saved active project
+      const savedActiveProject = await loadActiveProject();
+      let projectToLoad = null;
+      
+      if (savedActiveProject && savedActiveProject.projectId) {
+        // Check if saved project exists and is valid
+        if (savedActiveProject.projectId === LIVE_WEBSITE_ID) {
+          // Live Website - always available
+          currentProjectId = LIVE_WEBSITE_ID;
+          currentProjectName = LIVE_WEBSITE_NAME;
+          currentVersionIndex = null;
+          projectToLoad = 'live';
+        } else {
+          // Regular project - check if it exists
+          const foundProject = projects.find(p => p.id === savedActiveProject.projectId);
+          if (foundProject) {
+            currentProjectId = foundProject.id;
+            currentProjectName = foundProject.name;
+            // Restore saved version index if available and valid
+            if (savedActiveProject.versionIndex !== undefined && savedActiveProject.versionIndex !== null) {
+              // Validate that the version index is within bounds
+              if (foundProject.versions && foundProject.versions.length > 0) {
+                const savedIndex = savedActiveProject.versionIndex;
+                if (savedIndex >= 0 && savedIndex < foundProject.versions.length) {
+                  currentVersionIndex = savedIndex;
+                } else {
+                  // Invalid index - default to latest
+                  currentVersionIndex = null;
+                }
+              } else {
+                currentVersionIndex = null;
+              }
+            } else {
+              currentVersionIndex = null; // Show latest version if no saved index
+            }
+            projectToLoad = foundProject;
+          }
+        }
+      }
+      
+      // If no saved active project or saved project doesn't exist, use defaults
+      if (!projectToLoad) {
+        if (projects.length === 0) {
+          // No projects exist - default to "new_project"
+          currentProjectId = null;
+          currentProjectName = 'new_project';
+          currentVersionIndex = null;
+          // Don't load HTML - stay with initial state
+          resolve();
+          return;
+        } else {
+          // Load first project by default
+          const firstProject = projects[0];
+          currentProjectId = firstProject.id;
+          currentProjectName = firstProject.name;
+          currentVersionIndex = null;
+          projectToLoad = firstProject;
+        }
+      }
+      
+      // Load the selected project
+      if (projectToLoad === 'live') {
+        // Load Live Website HTML
+        getLiveWebsiteHTML().then(html => {
+          if (html && html !== document.documentElement.outerHTML) {
+            replaceBodyContentPreservingOverlay(html);
+          }
+          resolve();
+        });
+      } else if (projectToLoad && !isLiveWebsite(projectToLoad.id)) {
+        // Load regular project HTML
+        // If we have a saved version index, navigate to that specific version
+        // Otherwise just load the project (which will load latest or specified version)
+        if (currentVersionIndex !== null && projectToLoad.versions && projectToLoad.versions.length > 0) {
+          // Navigate to the specific version (which will load HTML and chat history)
+          navigateToVersion(projectToLoad, currentVersionIndex).then(() => {
+            resolve();
+          });
+        } else {
+          // Load project normally (latest version)
+          loadProjectHTML(projectToLoad);
+          resolve();
+        }
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Surgically replace body content while preserving Polish overlay
+ * This prevents destroying cached element references and event listeners
+ * @param {string} newBodyHTML - The new body HTML content to insert
  */
 function replaceBodyContentPreservingOverlay(newBodyHTML) {
   // Remove all body children EXCEPT Polish extension elements
@@ -419,7 +527,7 @@ function replaceBodyContentPreservingOverlay(newBodyHTML) {
   const temp = document.createElement('div');
   temp.innerHTML = newBodyHTML;
 
-  // Insert new content BEFORE overlay wrapper (keeps overlay at end of body)
+  // Insert new content BEFORE overlay wrapper (keeps overlay at end)
   const overlayWrapper = document.getElementById('polish-overlay-wrapper');
   Array.from(temp.children).forEach(child => {
     if (overlayWrapper) {
@@ -434,13 +542,32 @@ function replaceBodyContentPreservingOverlay(newBodyHTML) {
  * Load project HTML state
  */
 function loadProjectHTML(project) {
-  if (project && project.html) {
+  // Determine which HTML to load - use version if viewing specific version, otherwise latest
+  let htmlToLoad = null;
+  
+  if (project.versions && project.versions.length > 0) {
+    // Check if viewing a specific version
+    if (currentVersionIndex !== null && currentVersionIndex >= 0 && currentVersionIndex < project.versions.length) {
+      htmlToLoad = project.versions[currentVersionIndex].html;
+    } else {
+      // Load latest version
+      const latestVersion = project.versions[project.versions.length - 1];
+      htmlToLoad = latestVersion.html;
+      currentVersionIndex = project.versions.length - 1;
+    }
+  } else if (project.html) {
+    // Legacy: project has html directly (old format) - will migrate to versions on first save
+    htmlToLoad = project.html;
+    currentVersionIndex = null; // No versions yet
+  }
+  
+  if (htmlToLoad) {
     try {
-      console.log(`Loading project: ${project.name}`);
+      console.log(`Loading project: ${project.name}, version: ${currentVersionIndex !== null ? currentVersionIndex + 1 : 'latest'}`);
 
       // Parse the saved HTML safely using DOMParser
       const parser = new DOMParser();
-      const savedDoc = parser.parseFromString(project.html, 'text/html');
+      const savedDoc = parser.parseFromString(htmlToLoad, 'text/html');
 
       // Use surgical replacement to preserve Polish overlay
       // This prevents destroying cached element references and event listeners
@@ -475,12 +602,26 @@ function loadProjectHTML(project) {
       // Update UI immediately (no setTimeout needed since overlay was preserved)
       updateElementInfo(null, null);
       updateUIForState();
+      
+      // Update navigation buttons
+      updateNavigationButtons(project);
+      
+      // Reload chat history and highlight active version
+      if (isOverlayVisible) {
+        loadChatHistory().then(data => {
+          displayChatHistory(data);
+        });
+      }
 
       console.log('Project HTML loaded successfully');
     } catch (error) {
       console.error('Failed to load project HTML:', error);
       showNotification('Failed to load project', 'error');
     }
+  } else {
+    // No HTML to load
+    currentVersionIndex = null;
+    updateNavigationButtons(project);
   }
 }
 
@@ -532,22 +673,7 @@ function setupOverlayEventListeners() {
     });
   }
 
-  // Discard button - revert to initial state
-  if (elements.discardBtn) {
-    elements.discardBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      handleDiscard();
-    });
-  }
-
   // Save button - save current state to project
-  if (elements.saveBtn) {
-    elements.saveBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      handleSaveProject();
-    });
-  }
-
   // Publish button - placeholder (no functionality)
   if (elements.publishBtn) {
     elements.publishBtn.addEventListener('click', (e) => {
@@ -579,14 +705,14 @@ function setupOverlayEventListeners() {
   if (elements.backBtn) {
     elements.backBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Back clicked (placeholder)');
+      handleNavigateBack();
     });
   }
 
   if (elements.forwardBtn) {
     elements.forwardBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      console.log('Forward clicked (placeholder)');
+      handleNavigateForward();
     });
   }
 
@@ -661,8 +787,8 @@ function showOverlayUI() {
   updateViewModeButton();
 
   // Load and display chat history
-  loadChatHistory().then(messages => {
-    displayChatHistory(messages);
+  loadChatHistory().then(data => {
+    displayChatHistory(data);
   }).catch(error => {
     console.error('Failed to load chat history:', error);
   });
@@ -814,30 +940,9 @@ function handleDeselectElement() {
  * Handle view mode toggle (Phone/Desktop)
  */
 function handleToggleViewMode() {
-  try {
-    viewMode = viewMode === 'desktop' ? 'phone' : 'desktop';
-    applyViewMode();
-    updateViewModeButton();
-  } catch (error) {
-    console.error('Phone mode activation failed:', error);
-
-    // Auto-revert to desktop mode on error
-    viewMode = 'desktop';
-
-    // Attempt cleanup
-    try {
-      removePhoneModeWrapper();
-      restoreDesktopViewport();
-    } catch (cleanupError) {
-      console.error('Cleanup failed:', cleanupError);
-    }
-
-    // Update UI to reflect reverted state
-    updateViewModeButton();
-
-    // Notify user
-    showNotification('Phone mode encountered an error and was disabled. Please try again.', 'error');
-  }
+  viewMode = viewMode === 'desktop' ? 'phone' : 'desktop';
+  applyViewMode();
+  updateViewModeButton();
 }
 
 // Viewport meta tag reference
@@ -846,35 +951,24 @@ let originalViewportContent = null;
 
 /**
  * Apply current view mode to the website preview
- * If selection mode is active, migrates it to the new context
  */
 function applyViewMode() {
   if (!document.body.classList.contains('polish-overlay-active')) {
     return; // Only apply when overlay is active
   }
 
-  // If selection mode is active, we need to migrate it to new context
-  const wasSelectionActive = isSelectionMode;
-
-  if (wasSelectionActive) {
-    disableSelectionMode(); // Clean up old context
-  }
-
   if (viewMode === 'phone') {
-    // Don't transform body element (prevents overlay clipping bug)
+    document.documentElement.classList.add('polish-phone-mode');
+    document.body.classList.add('polish-phone-mode');
+    document.body.classList.remove('polish-desktop-mode');
     createPhoneModeWrapper();
     setPhoneViewport();
   } else {
+    document.documentElement.classList.remove('polish-phone-mode');
+    document.body.classList.add('polish-desktop-mode');
+    document.body.classList.remove('polish-phone-mode');
     removePhoneModeWrapper();
     restoreDesktopViewport();
-  }
-
-  // Re-enable selection in new context if it was active
-  if (wasSelectionActive) {
-    // Small delay to ensure iframe is ready (if switching to phone mode)
-    setTimeout(() => {
-      enableSelectionMode();
-    }, 100);
   }
 }
 
@@ -883,34 +977,40 @@ function applyViewMode() {
  */
 function createPhoneModeWrapper() {
   if (phoneModeWrapper) return; // Already exists
-
-  // Hide original page content (but keep Polish overlay and wrapper visible)
-  const originalContent = Array.from(document.body.children).filter(child =>
-    !child.hasAttribute('data-polish-extension') &&
-    child.id !== 'polish-overlay-wrapper' &&
-    child.id !== 'polish-phone-wrapper'
+  
+  // Hide original page content (but keep our overlay visible)
+  const originalContent = Array.from(document.body.children).filter(child => 
+    !child.hasAttribute('data-polish-extension') && 
+    child.id !== 'polish-overlay-wrapper'
   );
-
+  
   // Store reference to original content for restoration
   phoneModeWrapper = {
     container: null,
     iframe: null,
     hiddenContent: originalContent
   };
-
-  // Create container for phone bezel (styling now in CSS)
+  
+  // Create container for phone bezel
   const container = document.createElement('div');
   container.id = 'polish-phone-wrapper';
   container.setAttribute('data-polish-extension', 'true');
-
+  container.className = 'polish-phone-viewport-container';
+  
   // Create iframe that will load the current page
   const iframe = document.createElement('iframe');
   iframe.id = 'polish-phone-iframe';
   iframe.setAttribute('data-polish-extension', 'true');
-  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Set BEFORE src to prevent recursion
+  iframe.setAttribute('data-polish-phone-iframe', 'true'); // Mark so content script skips init in iframe
   iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals');
-  // Note: Styling moved to content.css #polish-phone-iframe
-
+  iframe.style.cssText = `
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: white;
+  `;
+  
   // Hide original content
   originalContent.forEach(child => {
     if (child.style) {
@@ -918,8 +1018,8 @@ function createPhoneModeWrapper() {
       child.style.display = 'none';
     }
   });
-
-  // Load current page in iframe (data-polish-phone-iframe attribute already set above)
+  
+  // Load current page in iframe
   iframe.src = window.location.href;
   
   // When iframe loads, inject mobile viewport code
@@ -978,21 +1078,11 @@ function createPhoneModeWrapper() {
         }
       `;
       iframeDoc.head.appendChild(style);
-
+      
       // Trigger resize event
       iframeWin.dispatchEvent(new Event('resize'));
       iframeWin.dispatchEvent(new Event('orientationchange'));
-
-      // If selection mode was active, re-enable it in iframe context
-      if (isSelectionMode) {
-        // Give iframe a moment to stabilize
-        setTimeout(() => {
-          // Re-initialize selection in iframe context
-          disableSelectionMode();
-          enableSelectionMode();
-        }, 50);
-      }
-
+      
     } catch (e) {
       console.error('Error setting up mobile viewport in iframe:', e);
       // If same-origin policy blocks access, fall back to simpler approach
@@ -1354,7 +1444,7 @@ async function handleSend() {
     return;
   }
 
-  // Handle Auto mode (neither Edit nor Chat selected)
+  // Handle Agent mode (neither Edit nor Chat selected)
   if (currentMode === null || currentMode === undefined) {
     await handleAutoMode(userRequest);
     return;
@@ -1427,6 +1517,13 @@ async function handleSend() {
       } catch (error) {
         console.error('Failed to save assistant message:', error);
         // Continue even if save fails
+      }
+
+      // Auto-save version after modifications are applied
+      try {
+        await autoSaveVersion();
+      } catch (error) {
+        console.error('Failed to auto-save version:', error);
       }
 
       showModificationStatus('Modifications applied successfully!', 'success');
@@ -1566,6 +1663,13 @@ async function handleChatSend(userRequest) {
       console.error('Failed to save assistant message:', error);
     }
 
+    // Auto-save version after chat response (no HTML changes, but still save chat)
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save version:', error);
+    }
+
     showModificationStatus('Answer generated!', 'success');
     setTimeout(() => {
       showModificationStatus('', '');
@@ -1604,7 +1708,7 @@ async function handleChatSend(userRequest) {
 }
 
 /**
- * Handle auto mode (neither Edit nor Chat selected) - automatically perform tasks
+ * Handle agent mode (neither Edit nor Chat selected) - automatically perform tasks
  */
 async function handleAutoMode(userRequest) {
   // Create user message for chat history
@@ -1755,6 +1859,13 @@ async function handleAutoMode(userRequest) {
       console.error('Failed to save assistant message:', error);
     }
 
+    // Auto-save version after task is completed
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save version:', error);
+    }
+
     if (appliedCount > 0) {
       showModificationStatus(`Task completed! Modified ${appliedCount} element(s).`, 'success');
     } else {
@@ -1767,7 +1878,7 @@ async function handleAutoMode(userRequest) {
     }, 3000);
 
   } catch (error) {
-    console.error('Auto mode failed:', error);
+    console.error('Agent mode failed:', error);
     let errorMessage = error.message || 'Failed to perform task';
     if (errorMessage.includes('CORS')) {
       errorMessage = 'API Error: Please check your API key and permissions';
@@ -1859,7 +1970,7 @@ function updateUIForState() {
       elements.modificationInput.placeholder = 'Ask Polish...';
       elements.sendBtn.disabled = false;
     } else {
-      // Auto mode (neither edit nor chat) - allow free text for task requests
+      // Agent mode (neither edit nor chat) - allow free text for task requests
       elements.modificationInput.disabled = false;
       elements.modificationInput.placeholder = 'Tell Polish what to do...';
       elements.sendBtn.disabled = false;
@@ -1956,90 +2067,33 @@ function toggleSelectionMode() {
 }
 
 /**
- * Get the correct document and window context for element selection
- * Returns parent context in desktop mode, iframe context in phone mode
- * @returns {Object|null} Context object with document, window, and metadata, or null if unavailable
- */
-function getSelectionContext() {
-  // Check if phone mode is active and iframe is loaded
-  if (phoneModeWrapper?.iframe?.contentDocument) {
-    try {
-      // Test if we can access the iframe document (same-origin check)
-      const iframeDoc = phoneModeWrapper.iframe.contentDocument;
-      const iframeWin = phoneModeWrapper.iframe.contentWindow;
-
-      return {
-        document: iframeDoc,
-        window: iframeWin,
-        isIframe: true,
-        iframeElement: phoneModeWrapper.iframe
-      };
-    } catch (e) {
-      console.warn('Cannot access iframe document (cross-origin):', e);
-      return null;
-    }
-  }
-
-  // Default to parent document (desktop mode or phone mode iframe not ready)
-  return {
-    document: document,
-    window: window,
-    isIframe: false,
-    iframeElement: null
-  };
-}
-
-/**
  * Enable selection mode - add event listeners
- * Context-aware: works in both desktop mode (parent document) and phone mode (iframe document)
  */
 function enableSelectionMode() {
-  // Get correct context (parent or iframe)
-  const context = getSelectionContext();
+  document.addEventListener('mouseover', handleMouseOver, true);
+  document.addEventListener('mouseout', handleMouseOut, true);
+  document.addEventListener('click', handleClick, true);
 
-  if (!context) {
-    showNotification('Cannot enable selection in phone mode - iframe not ready', 'error');
-    return;
-  }
-
-  selectionContext = context;
-
-  // Attach event listeners to correct document
-  context.document.addEventListener('mouseover', handleMouseOver, true);
-  context.document.addEventListener('mouseout', handleMouseOut, true);
-  context.document.addEventListener('click', handleClick, true);
-
-  context.document.body.style.cursor = 'crosshair';
+  document.body.style.cursor = 'crosshair';
   showNotification('Selection mode active - Click an element to select it');
 }
 
 /**
  * Disable selection mode - remove event listeners
- * Context-aware: removes listeners from correct document (parent or iframe)
  */
 function disableSelectionMode() {
-  if (!selectionContext) return;
+  document.removeEventListener('mouseover', handleMouseOver, true);
+  document.removeEventListener('mouseout', handleMouseOut, true);
+  document.removeEventListener('click', handleClick, true);
 
-  // Remove event listeners from correct document
-  selectionContext.document.removeEventListener('mouseover', handleMouseOver, true);
-  selectionContext.document.removeEventListener('mouseout', handleMouseOut, true);
-  selectionContext.document.removeEventListener('click', handleClick, true);
-
-  selectionContext.document.body.style.cursor = '';
-
+  document.body.style.cursor = '';
+  
   // Don't hide overlay if we have a selected element - keep it highlighted
   if (!selectedElement) {
     hideOverlay();
   }
-
-  // Remove overlay from correct document if no element is selected
-  if (!selectedElement && overlayElement && overlayElement.parentNode) {
-    overlayElement.remove();
-    overlayElement = null;
-  }
-
+  
   currentlyHighlightedElement = null;
-  selectionContext = null;
 }
 
 /**
@@ -2277,17 +2331,13 @@ function sanitizeHTML(html) {
  * Highlight an element with overlay
  */
 function highlightElement(element, isSelected = false) {
-  if (!overlayElement || !selectionContext) return;
+  if (!overlayElement) return;
 
-  // getBoundingClientRect() returns coordinates relative to the viewport
-  // In iframe context: relative to iframe's viewport (which is what we want)
-  // In parent context: relative to parent's viewport (which is what we want)
-  // Since overlay is in the same document as the element, coordinates align perfectly
   const rect = element.getBoundingClientRect();
 
   overlayElement.style.display = 'block';
   overlayElement.style.position = 'fixed'; // Use fixed positioning for better accuracy
-  overlayElement.style.top = `${rect.top}px`;
+  overlayElement.style.top = `${rect.top}px`; // getBoundingClientRect() already gives viewport coordinates
   overlayElement.style.left = `${rect.left}px`;
   overlayElement.style.width = `${rect.width}px`;
   overlayElement.style.height = `${rect.height}px`;
@@ -2325,18 +2375,7 @@ function hideOverlay() {
  * Create overlay element for highlighting
  */
 function createOverlay() {
-  if (!selectionContext) {
-    console.error('Cannot create overlay - no selection context');
-    return;
-  }
-
-  // Remove old overlay if it exists
-  if (overlayElement && overlayElement.parentNode) {
-    overlayElement.remove();
-  }
-
-  // Create overlay in correct document (parent or iframe)
-  overlayElement = selectionContext.document.createElement('div');
+  overlayElement = document.createElement('div');
   overlayElement.setAttribute('data-polish-extension', 'true');
   overlayElement.className = 'polish-element-overlay';
   overlayElement.style.cssText = `
@@ -2347,7 +2386,7 @@ function createOverlay() {
     box-sizing: border-box;
   `;
 
-  selectionContext.document.body.appendChild(overlayElement);
+  document.body.appendChild(overlayElement);
 }
 
 /**
@@ -2486,6 +2525,12 @@ function createSettingsOverlay() {
             </button>
           </div>
           <div id="polish-settings-api-key-status" class="polish-settings-status hidden"></div>
+        </div>
+        <div class="polish-settings-section">
+          <label class="polish-settings-label">GitHub</label>
+          <button id="polish-settings-connect-github-btn" class="polish-btn polish-btn-primary polish-btn-text">
+            Connect GitHub
+          </button>
         </div>
       </div>
     </div>
@@ -2709,8 +2754,8 @@ function createVersionsOverlay() {
       if (newName && newName !== currentProjectName) {
         currentProjectName = newName;
         updateProjectNameDisplay();
-        // If project is saved, update its name in storage
-        if (isProjectSaved && currentProjectId) {
+        // Update project name in storage if project exists
+        if (currentProjectId) {
           updateProjectName(currentProjectId, newName);
         }
       }
@@ -2908,34 +2953,67 @@ function createProjectItem(project) {
  * Switch to Live Website
  */
 async function switchToLiveWebsite() {
+  // Save current project's chat history before switching (if we have unsaved messages)
+  if (currentProjectId && !isLiveWebsite(currentProjectId)) {
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save before switching to Live Website:', error);
+    }
+  }
+  
+  // Clear temporary messages
+  temporaryChatMessages = [];
+  
   currentProjectId = LIVE_WEBSITE_ID;
   currentProjectName = LIVE_WEBSITE_NAME;
-  isProjectSaved = true;
+  currentVersionIndex = null;
   
   updateProjectNameDisplay();
   
   // Load Live Website HTML
   const liveHTML = await getLiveWebsiteHTML();
-  if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
-    document.documentElement.outerHTML = liveHTML;
-    
-    // Re-initialize after HTML change
-    setTimeout(() => {
-      injectOverlay();
-      setupOverlayEventListeners();
-      cacheOverlayElements();
-      
+  if (liveHTML) {
+    try {
+      // Parse the HTML safely
+      const parser = new DOMParser();
+      const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+      // Use surgical replacement to preserve Polish overlay
+      replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+      // Clear selection
       selectedElement = null;
+      currentlyHighlightedElement = null;
+
+      // Clear highlights
       if (overlayElement) {
         overlayElement.style.display = 'none';
       }
-      
+
+      // Update UI immediately
       updateElementInfo(null, null);
       updateUIForState();
-    }, 100);
+    } catch (error) {
+      console.error('Failed to load live HTML:', error);
+      showNotification('Failed to switch to live website', 'error');
+    }
+  }
+  
+  // Reload chat history for the Live Website project
+  if (isOverlayVisible) {
+    loadChatHistory().then(data => {
+      displayChatHistory({ messages: [], project: null }); // Live Website has no project
+    }).catch(error => {
+      console.error('Failed to load chat history:', error);
+    });
   }
   
   hideVersionsOverlay();
+  
+  // Save active project
+  await saveActiveProject();
+  
   showNotification(`Switched to ${LIVE_WEBSITE_NAME}`, 'success');
 }
 
@@ -2957,11 +3035,24 @@ async function switchToProject(projectId) {
     if (project) {
       currentProjectId = project.id;
       currentProjectName = project.name;
-      isProjectSaved = true;
+      currentVersionIndex = null; // Show latest version
       
       updateProjectNameDisplay();
       loadProjectHTML(project);
+      
+      // Reload chat history for the switched project
+      if (isOverlayVisible) {
+        loadChatHistory().then(data => {
+          displayChatHistory(data);
+        }).catch(error => {
+          console.error('Failed to load chat history:', error);
+        });
+      }
+      
       hideVersionsOverlay();
+      
+      // Save active project
+      saveActiveProject();
       
       showNotification(`Switched to project: ${project.name}`, 'success');
     }
@@ -2983,6 +3074,8 @@ async function updateProjectName(projectId, newName) {
       
       chrome.storage.local.set({ [storageKey]: projects }, () => {
         console.log('Project name updated');
+        // Save active project with updated name
+        saveActiveProject();
       });
     }
   });
@@ -3138,14 +3231,52 @@ async function deleteProject(projectId) {
         
         updateProjectNameDisplay();
         
-        // Revert to initial HTML
-        if (initialHTML) {
-          document.documentElement.outerHTML = initialHTML;
-          setTimeout(() => {
-            injectOverlay();
-            setupOverlayEventListeners();
-          }, 100);
-        }
+        // Load Live Website HTML
+        getLiveWebsiteHTML().then(liveHTML => {
+          if (liveHTML) {
+            try {
+              // Parse the HTML safely
+              const parser = new DOMParser();
+              const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+              // Use surgical replacement to preserve Polish overlay
+              replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+              // Clear selection
+              selectedElement = null;
+              currentlyHighlightedElement = null;
+
+              // Clear highlights
+              if (overlayElement) {
+                overlayElement.style.display = 'none';
+              }
+
+              // Update UI immediately
+              updateElementInfo(null, null);
+              updateUIForState();
+              
+              // Reload chat history for Live Website
+              if (isOverlayVisible) {
+                loadChatHistory().then(data => {
+                  displayChatHistory({ messages: [], project: null });
+                }).catch(error => {
+                  console.error('Failed to load chat history:', error);
+                });
+              }
+            } catch (error) {
+              console.error('Failed to load live HTML:', error);
+            }
+          }
+        });
+        
+        hideVersionsOverlay();
+        
+        // Save active project (now Live Website)
+        saveActiveProject();
+        
+        showNotification('Project deleted. Switched to Live Website.', 'success');
+      } else {
+        showNotification('Project deleted', 'success');
       }
       
       refreshProjectsList();
@@ -3158,20 +3289,36 @@ async function deleteProject(projectId) {
  * Create new project from current state
  */
 async function createNewProjectFromCurrent() {
+  // Save current project's chat history before creating new project
+  if (currentProjectId && !isLiveWebsite(currentProjectId)) {
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save before creating new project:', error);
+    }
+  }
+  
   const currentHTML = document.documentElement.outerHTML;
   
   // Generate project ID and name
   const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const projectName = generateProjectName();
   
+  // Clear temporary messages for new project
+  temporaryChatMessages = [];
+  
   const project = {
     id: projectId,
     name: projectName,
-    html: currentHTML,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     isLive: false,
-    sourceProjectId: currentProjectId || null
+    sourceProjectId: currentProjectId || null,
+    versions: [{
+      html: currentHTML,
+      chatMessages: [],
+      savedAt: Date.now()
+    }]
   };
   
   const storageKey = `polish_projects_${currentUrl}`;
@@ -3183,14 +3330,30 @@ async function createNewProjectFromCurrent() {
       // Switch to new project
       currentProjectId = projectId;
       currentProjectName = projectName;
-      isProjectSaved = true;
+      currentVersionIndex = 0; // First version
       
       updateProjectNameDisplay();
+      
+      // Update navigation buttons
+      updateNavigationButtons(project);
+      
+      // Reload chat history for the new project (will be empty)
+      if (isOverlayVisible) {
+        loadChatHistory().then(data => {
+          displayChatHistory(data);
+        }).catch(error => {
+          console.error('Failed to load chat history:', error);
+        });
+      }
       
       // Refresh project list
       refreshProjectsList();
       
       hideVersionsOverlay();
+      
+      // Save active project
+      saveActiveProject();
+      
       showNotification(`Created new project: "${projectName}"`, 'success');
       console.log('New project created from current state');
     });
@@ -3201,20 +3364,36 @@ async function createNewProjectFromCurrent() {
  * Create new project from Live Website
  */
 async function createNewProjectFromLive() {
+  // Save current project's chat history before creating new project
+  if (currentProjectId && !isLiveWebsite(currentProjectId)) {
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save before creating new project from Live:', error);
+    }
+  }
+  
   const liveHTML = await getLiveWebsiteHTML();
   
   // Generate project ID and name
   const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const projectName = generateProjectName();
   
+  // Clear temporary messages for new project
+  temporaryChatMessages = [];
+  
   const project = {
     id: projectId,
     name: projectName,
-    html: liveHTML,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     isLive: false,
-    sourceProjectId: LIVE_WEBSITE_ID
+    sourceProjectId: LIVE_WEBSITE_ID,
+    versions: [{
+      html: liveHTML,
+      chatMessages: [],
+      savedAt: Date.now()
+    }]
   };
   
   const storageKey = `polish_projects_${currentUrl}`;
@@ -3226,31 +3405,52 @@ async function createNewProjectFromLive() {
       // Switch to new project
       currentProjectId = projectId;
       currentProjectName = projectName;
-      isProjectSaved = true;
+      currentVersionIndex = 0; // First version
       
       // Load the Live Website HTML into the new project
-      if (liveHTML && liveHTML !== document.documentElement.outerHTML) {
-        document.documentElement.outerHTML = liveHTML;
-        
-        setTimeout(() => {
-          injectOverlay();
-          setupOverlayEventListeners();
-          cacheOverlayElements();
-          
+      if (liveHTML) {
+        try {
+          // Parse the HTML safely
+          const parser = new DOMParser();
+          const liveDoc = parser.parseFromString(liveHTML, 'text/html');
+
+          // Use surgical replacement to preserve Polish overlay
+          replaceBodyContentPreservingOverlay(liveDoc.body.innerHTML);
+
+          // Clear selection
           selectedElement = null;
+          currentlyHighlightedElement = null;
+
+          // Clear highlights
           if (overlayElement) {
             overlayElement.style.display = 'none';
           }
-          
+
+          // Update UI immediately
           updateElementInfo(null, null);
           updateUIForState();
-        }, 100);
+        } catch (error) {
+          console.error('Failed to load live HTML:', error);
+        }
+      }
+      
+      // Reload chat history for the new project (will be empty)
+      if (isOverlayVisible) {
+        loadChatHistory().then(data => {
+          displayChatHistory(data);
+        }).catch(error => {
+          console.error('Failed to load chat history:', error);
+        });
       }
       
       updateProjectNameDisplay();
       refreshProjectsList();
       
       hideVersionsOverlay();
+      
+      // Save active project
+      saveActiveProject();
+      
       showNotification(`Created new project from Live Website: "${projectName}"`, 'success');
       console.log('New project created from Live Website');
     });
@@ -3261,6 +3461,15 @@ async function createNewProjectFromLive() {
  * Duplicate a project
  */
 async function duplicateProject(sourceProjectId) {
+  // Save current project's chat history before duplicating
+  if (currentProjectId && !isLiveWebsite(currentProjectId) && currentProjectId !== sourceProjectId) {
+    try {
+      await autoSaveVersion();
+    } catch (error) {
+      console.error('Failed to auto-save before duplicating project:', error);
+    }
+  }
+  
   const storageKey = `polish_projects_${currentUrl}`;
   
   chrome.storage.local.get([storageKey], async (result) => {
@@ -3288,32 +3497,61 @@ async function duplicateProject(sourceProjectId) {
     const projectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const projectName = `Copy of ${sourceProject.name}`;
     
+    // Copy versions if they exist, otherwise create from legacy HTML
+    let versions = [];
+    if (sourceProject.versions && sourceProject.versions.length > 0) {
+      versions = JSON.parse(JSON.stringify(sourceProject.versions)); // Deep copy
+    } else if (sourceProject.html) {
+      // Legacy project - create first version from HTML
+      versions = [{
+        html: sourceProject.html,
+        chatMessages: [],
+        savedAt: Date.now()
+      }];
+    }
+    
     const newProject = {
       id: projectId,
       name: projectName,
-      html: sourceProject.html,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isLive: false,
-      sourceProjectId: sourceProjectId
+      sourceProjectId: sourceProjectId,
+      versions: versions
     };
     
     projects.push(newProject);
     
     chrome.storage.local.set({ [storageKey]: projects }, () => {
       // Switch to duplicated project
+      // Clear temporary messages for duplicated project
+      temporaryChatMessages = [];
+      
       currentProjectId = projectId;
       currentProjectName = projectName;
-      isProjectSaved = true;
+      currentVersionIndex = versions.length > 0 ? versions.length - 1 : null; // Latest version
       
       // Load the duplicated HTML
       loadProjectHTML(newProject);
+      
+      // Reload chat history for the duplicated project (will be empty - chat history is not duplicated)
+      if (isOverlayVisible) {
+        loadChatHistory().then(data => {
+          displayChatHistory(data);
+        }).catch(error => {
+          console.error('Failed to load chat history:', error);
+        });
+      }
       
       updateProjectNameDisplay();
       refreshProjectsList();
       
       hideDeleteOverlay();
       hideVersionsOverlay();
+      
+      // Save active project
+      saveActiveProject();
+      
       showNotification(`Duplicated project: "${projectName}"`, 'success');
       console.log('Project duplicated');
     });
@@ -3335,75 +3573,346 @@ function generateProjectName() {
 }
 
 /**
- * Handle Save button - save current state to project
+ * Auto-save current state as a new version
+ * Called automatically after each chat interaction
  */
-async function handleSaveProject() {
-  const currentHTML = document.documentElement.outerHTML;
-  
+async function autoSaveVersion() {
+  // Don't allow saving Live Website
+  if (isLiveWebsite(currentProjectId) || !currentUrl) {
+    return;
+  }
+
   // Generate project ID if needed
   if (!currentProjectId) {
     currentProjectId = `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  const project = {
-    id: currentProjectId,
-    name: currentProjectName,
-    html: currentHTML,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    isLive: false,
-    sourceProjectId: null
-  };
+  // Clone the document to avoid modifying the live DOM
+  const clonedDoc = document.documentElement.cloneNode(true);
 
+  // Remove Polish extension elements from clone (don't save our UI)
+  clonedDoc.querySelectorAll('[data-polish-extension="true"]').forEach(el => el.remove());
+  const overlayWrapper = clonedDoc.querySelector('#polish-overlay-wrapper');
+  if (overlayWrapper) {
+    overlayWrapper.remove();
+  }
+
+  // Get clean HTML without Polish elements
+  const currentHTML = clonedDoc.outerHTML;
+  
+  // Get current chat history - combine latest version messages + temporary messages
   const storageKey = `polish_projects_${currentUrl}`;
+  const tempStorageKey = `polish_chat_history_temp_${currentUrl}`;
+  
+  // Get both project data and temporary messages
+  const result = await new Promise((resolve) => {
+    chrome.storage.local.get([storageKey, tempStorageKey], (data) => {
+      resolve(data);
+    });
+  });
+  
+  const projects = result[storageKey] || [];
+  const project = projects.find(p => p.id === currentProjectId);
+  
+  let chatMessages = [];
+  
+  // Get messages from latest version if it exists
+  if (project && project.versions && project.versions.length > 0) {
+    const latestVersion = project.versions[project.versions.length - 1];
+    chatMessages = [...(latestVersion.chatMessages || [])];
+  }
+  
+  // Add temporary messages (unsaved since last version)
+  const urlHistory = result[tempStorageKey] || {};
+  const tempMessages = urlHistory[currentProjectId] || [];
+  
+  // Filter out messages that are already in the latest version to avoid duplicates
+  if (chatMessages.length > 0) {
+    const existingMessageIds = new Set(chatMessages.map(m => m.id));
+    const newTempMessages = tempMessages.filter(m => !existingMessageIds.has(m.id));
+    chatMessages = [...chatMessages, ...newTempMessages];
+  } else {
+    // No version messages yet, use all temp messages
+    chatMessages = [...tempMessages];
+  }
+  
+  // Also include any messages in the in-memory array that might not be persisted yet
+  if (temporaryChatMessages.length > 0) {
+    const existingMessageIds = new Set(chatMessages.map(m => m.id));
+    const newInMemoryMessages = temporaryChatMessages.filter(m => !existingMessageIds.has(m.id));
+    chatMessages = [...chatMessages, ...newInMemoryMessages];
+  }
+  
   chrome.storage.local.get([storageKey], (result) => {
     const projects = result[storageKey] || [];
-
-    // Update or add project
-    const existingIndex = projects.findIndex(p => p.id === currentProjectId);
-    if (existingIndex >= 0) {
-      project.createdAt = projects[existingIndex].createdAt; // Preserve original creation date
-      project.sourceProjectId = projects[existingIndex].sourceProjectId; // Preserve source
-      projects[existingIndex] = project;
-    } else {
+    
+    // Find existing project or create new one
+    let project = projects.find(p => p.id === currentProjectId);
+    
+    if (!project) {
+      // New project - create it
+      project = {
+        id: currentProjectId,
+        name: currentProjectName,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        isLive: false,
+        sourceProjectId: null,
+        versions: []
+      };
       projects.push(project);
+    } else {
+      // Preserve creation date and source
+      project.createdAt = project.createdAt || Date.now();
+      project.sourceProjectId = project.sourceProjectId || null;
+      project.updatedAt = Date.now();
     }
-
+    
+    // Initialize versions array if it doesn't exist (legacy projects)
+    if (!project.versions) {
+      project.versions = [];
+      // If there's legacy HTML, create first version from it
+      if (project.html) {
+        project.versions.push({
+          html: project.html,
+          chatMessages: [],
+          savedAt: project.updatedAt || Date.now()
+        });
+        // Remove legacy html field
+        delete project.html;
+      }
+    }
+    
+    // If we're viewing an old version and make changes, branch from that point
+    if (currentVersionIndex !== null && currentVersionIndex < project.versions.length - 1) {
+      // Remove all versions after current (user is branching)
+      project.versions = project.versions.slice(0, currentVersionIndex + 1);
+    }
+    
+    // Create new version
+    const newVersion = {
+      html: currentHTML,
+      chatMessages: [...chatMessages], // Copy current chat messages
+      savedAt: Date.now()
+    };
+    
+    project.versions.push(newVersion);
+    currentVersionIndex = project.versions.length - 1; // Set to latest version
+    
+    // Update project name if it changed
+    project.name = currentProjectName;
+    
     chrome.storage.local.set({ [storageKey]: projects }, () => {
-      isProjectSaved = true;
-      showNotification(`Project "${currentProjectName}" saved`, 'success');
-      console.log('Project saved successfully (without Polish elements)');
+      console.log(`Auto-saved version ${project.versions.length} for project ${currentProjectName} with ${chatMessages.length} messages`);
+      
+      // Clear temporary chat messages after saving to version
+      // All temporary messages were already included in chatMessages, so we can clear temp storage
+      temporaryChatMessages = [];
+      const tempStorageKey = `polish_chat_history_temp_${currentUrl}`;
+      chrome.storage.local.get([tempStorageKey], (result) => {
+        const urlHistory = result[tempStorageKey] || {};
+        // Only clear if messages were actually saved
+        if (chatMessages.length > 0) {
+          delete urlHistory[currentProjectId];
+          chrome.storage.local.set({ [tempStorageKey]: urlHistory }, () => {
+            console.log('Cleared temporary chat messages after saving to version');
+          });
+        }
+      });
+      
+      // Update navigation buttons
+      updateNavigationButtons(project);
     });
   });
 }
 
 /**
- * Handle Discard button - revert to initial state
+ * Handle back navigation - move to previous version
  */
-async function handleDiscard() {
-  // If on Live Website, do nothing (already at baseline)
-  if (isLiveWebsite(currentProjectId)) {
-    showNotification('Already viewing Live Website', 'info');
+async function handleNavigateBack() {
+  if (isLiveWebsite(currentProjectId) || !currentUrl) {
+    return; // Can't navigate on Live Website
+  }
+
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    const project = projects.find(p => p.id === currentProjectId);
+    
+    if (!project || !project.versions || project.versions.length === 0) {
+      return;
+    }
+    
+    // Determine current version index
+    let targetIndex = currentVersionIndex;
+    if (targetIndex === null) {
+      // At latest version - move to second-to-last
+      targetIndex = project.versions.length - 1;
+    }
+    
+    // Can't go back from first version
+    if (targetIndex <= 0) {
+      return;
+    }
+    
+    // Move to previous version
+    targetIndex = targetIndex - 1;
+    navigateToVersion(project, targetIndex);
+  });
+}
+
+/**
+ * Handle forward navigation - move to next version
+ */
+async function handleNavigateForward() {
+  if (isLiveWebsite(currentProjectId) || !currentUrl) {
+    return; // Can't navigate on Live Website
+  }
+
+  const storageKey = `polish_projects_${currentUrl}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const projects = result[storageKey] || [];
+    const project = projects.find(p => p.id === currentProjectId);
+    
+    if (!project || !project.versions || project.versions.length === 0) {
+      return;
+    }
+    
+    // Determine current version index
+    let targetIndex = currentVersionIndex;
+    if (targetIndex === null) {
+      // At latest version, can't go forward
+      return;
+    }
+    
+    // Can't go forward from last version
+    if (targetIndex >= project.versions.length - 1) {
+      return;
+    }
+    
+    // Move to next version
+    targetIndex = targetIndex + 1;
+    navigateToVersion(project, targetIndex);
+  });
+}
+
+/**
+ * Navigate to a specific version
+ */
+async function navigateToVersion(project, versionIndex) {
+  if (!project.versions || versionIndex < 0 || versionIndex >= project.versions.length) {
     return;
   }
   
-  // Revert to initial HTML
-  document.documentElement.outerHTML = initialHTML;
+  const version = project.versions[versionIndex];
   
-  // Reset project state (but keep name)
-  isProjectSaved = false;
+  // Update current version index
+  currentVersionIndex = versionIndex;
   
-  // Re-initialize overlay
-  setTimeout(() => {
-    try {
-      injectOverlay();
-      setupOverlayEventListeners();
-      showNotification('Changes discarded', 'success');
-    } catch (error) {
-      console.error('Failed to discard changes:', error);
-      showNotification('Failed to discard changes', 'error');
+  // Save the active project with the new version index
+  await saveActiveProject();
+  
+  // Load the HTML for this version
+  try {
+    const parser = new DOMParser();
+    const versionDoc = parser.parseFromString(version.html, 'text/html');
+    
+    // Use surgical replacement to preserve Polish overlay
+    replaceBodyContentPreservingOverlay(versionDoc.body.innerHTML);
+    
+    // Also update head
+    const savedHead = versionDoc.head;
+    if (savedHead) {
+      const styleElements = savedHead.querySelectorAll('style:not([data-polish-extension])');
+      styleElements.forEach(style => {
+        const existingStyle = Array.from(document.head.querySelectorAll('style')).find(s =>
+          s.textContent === style.textContent
+        );
+        if (!existingStyle) {
+          document.head.appendChild(style.cloneNode(true));
+        }
+      });
     }
-  }, 100);
+    
+    // Clear selection
+    selectedElement = null;
+    currentlyHighlightedElement = null;
+    
+    // Clear highlights
+    if (overlayElement) {
+      overlayElement.style.display = 'none';
+    }
+    
+    // Update UI
+    updateElementInfo(null, null);
+    updateUIForState();
+    
+    // Reload chat history for this version and highlight active message
+    loadChatHistory().then(data => {
+      displayChatHistory(data);
+    });
+    
+    // Update navigation buttons
+    updateNavigationButtons(project);
+    
+    showNotification(`Viewing version ${versionIndex + 1} of ${project.versions.length}`, 'info');
+  } catch (error) {
+    console.error('Failed to load version:', error);
+    showNotification('Failed to load version', 'error');
+  }
+}
+
+/**
+ * Update navigation button states (enabled/disabled)
+ */
+function updateNavigationButtons(project) {
+  if (!elements.backBtn || !elements.forwardBtn) {
+    return;
+  }
+  
+  // For Live Website, disable both buttons
+  if (isLiveWebsite(currentProjectId)) {
+    elements.backBtn.disabled = true;
+    elements.backBtn.classList.add('polish-btn-disabled');
+    elements.forwardBtn.disabled = true;
+    elements.forwardBtn.classList.add('polish-btn-disabled');
+    return;
+  }
+  
+  if (!project || !project.versions || project.versions.length === 0) {
+    // No versions yet, disable both
+    elements.backBtn.disabled = true;
+    elements.backBtn.classList.add('polish-btn-disabled');
+    elements.forwardBtn.disabled = true;
+    elements.forwardBtn.classList.add('polish-btn-disabled');
+    return;
+  }
+  
+  // Determine current version index
+  let currentIndex = currentVersionIndex;
+  if (currentIndex === null) {
+    // At latest version
+    currentIndex = project.versions.length - 1;
+  }
+  
+  // Enable/disable back button
+  if (currentIndex <= 0) {
+    elements.backBtn.disabled = true;
+    elements.backBtn.classList.add('polish-btn-disabled');
+  } else {
+    elements.backBtn.disabled = false;
+    elements.backBtn.classList.remove('polish-btn-disabled');
+  }
+  
+  // Enable/disable forward button
+  // Can only go forward if not at latest version
+  if (currentIndex >= project.versions.length - 1) {
+    elements.forwardBtn.disabled = true;
+    elements.forwardBtn.classList.add('polish-btn-disabled');
+  } else {
+    elements.forwardBtn.disabled = false;
+    elements.forwardBtn.classList.remove('polish-btn-disabled');
+  }
 }
 
 /**
@@ -3420,64 +3929,100 @@ function escapeHtml(text) {
 // ============================================================================
 
 /**
- * Load chat history for current domain from chrome.storage.local
- * @returns {Promise<Array>} Array of message objects
+ * Load chat history for current project from chrome.storage.local
+ * Always returns the FULL chat history from the latest version
+ * @returns {Promise<Object>} Object with { messages: Array, project: Object }
  */
 async function loadChatHistory() {
-  const domain = window.location.hostname;
+  if (!currentUrl || !currentProjectId || isLiveWebsite(currentProjectId)) {
+    return Promise.resolve({ messages: [], project: null });
+  }
+
+  const storageKey = `polish_projects_${currentUrl}`;
+  const tempStorageKey = `polish_chat_history_temp_${currentUrl}`;
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(['polish_chat_history'], (result) => {
+    chrome.storage.local.get([storageKey, tempStorageKey], (result) => {
       if (chrome.runtime.lastError) {
         console.error('Failed to load chat history:', chrome.runtime.lastError);
-        resolve([]);
+        resolve({ messages: [], project: null });
         return;
       }
 
-      const allHistory = result.polish_chat_history || {};
-      const domainHistory = allHistory[domain] || [];
-      console.log(`Loaded ${domainHistory.length} messages for ${domain}`);
-      resolve(domainHistory);
+      const projects = result[storageKey] || [];
+      const project = projects.find(p => p.id === currentProjectId);
+      
+      let messages = [];
+      
+      // Always load the FULL history from the latest version (not just up to current version)
+      // We'll highlight the appropriate message based on currentVersionIndex in displayChatHistory
+      if (project && project.versions && project.versions.length > 0) {
+        const latestVersion = project.versions[project.versions.length - 1];
+        messages = [...(latestVersion.chatMessages || [])];
+      }
+      
+      // Add temporary messages (unsaved since last version)
+      const urlHistory = result[tempStorageKey] || {};
+      const tempMessages = urlHistory[currentProjectId] || [];
+      
+      // Only add temp messages if we have versions (to avoid duplicates)
+      if (project && project.versions && project.versions.length > 0) {
+        // Filter out messages that are already in the latest version
+        const latestMessageIds = new Set((project.versions[project.versions.length - 1].chatMessages || []).map(m => m.id));
+        const newTempMessages = tempMessages.filter(m => !latestMessageIds.has(m.id));
+        messages = [...messages, ...newTempMessages];
+      } else {
+        // No versions yet, use temporary messages
+        messages = tempMessages;
+      }
+
+      console.log(`Loaded ${messages.length} messages (full history) for project ${currentProjectId}, viewing version ${currentVersionIndex !== null ? currentVersionIndex + 1 : 'latest'}`);
+      resolve({ messages, project }); // Return both messages and project for highlighting logic
     });
   });
 }
 
+// Temporary chat storage for real-time display (before version is saved)
+let temporaryChatMessages = [];
+
 /**
- * Save a chat message to chrome.storage.local
- * Auto-prunes to keep only 100 most recent messages per domain
+ * Save a chat message to temporary storage for real-time display
+ * Messages are saved to version when autoSaveVersion is called
  * @param {Object} message - Message object to save
  */
 async function saveChatMessage(message) {
-  const domain = window.location.hostname;
-  const MAX_MESSAGES = 100;
+  // Add to temporary storage for real-time display
+  temporaryChatMessages.push(message);
+  
+  // Also save to persistent storage for backup/real-time sync
+  if (!currentUrl || !currentProjectId || isLiveWebsite(currentProjectId)) {
+    return Promise.resolve();
+  }
+
+  const storageKey = `polish_chat_history_temp_${currentUrl}`;
 
   return new Promise((resolve, reject) => {
-    chrome.storage.local.get(['polish_chat_history'], (result) => {
+    chrome.storage.local.get([storageKey], (result) => {
       if (chrome.runtime.lastError) {
-        console.error('Failed to get chat history:', chrome.runtime.lastError);
+        console.error('Failed to get temporary chat history:', chrome.runtime.lastError);
         reject(chrome.runtime.lastError);
         return;
       }
 
-      const allHistory = result.polish_chat_history || {};
-      let domainHistory = allHistory[domain] || [];
+      const urlHistory = result[storageKey] || {};
+      let projectHistory = urlHistory[currentProjectId] || [];
 
       // Add new message
-      domainHistory.push(message);
+      projectHistory.push(message);
 
-      // Auto-prune if over limit (keep newest messages)
-      if (domainHistory.length > MAX_MESSAGES) {
-        domainHistory = domainHistory.slice(-MAX_MESSAGES);
-      }
+      urlHistory[currentProjectId] = projectHistory;
 
-      allHistory[domain] = domainHistory;
-
-      chrome.storage.local.set({ polish_chat_history: allHistory }, () => {
+      chrome.storage.local.set({ [storageKey]: urlHistory }, () => {
         if (chrome.runtime.lastError) {
           console.error('Failed to save chat message:', chrome.runtime.lastError);
           reject(chrome.runtime.lastError);
         } else {
-          console.log('Chat message saved successfully');
+          console.log(`Chat message saved temporarily for project ${currentProjectId}`);
           resolve();
         }
       });
@@ -3486,26 +4031,31 @@ async function saveChatMessage(message) {
 }
 
 /**
- * Clear chat history for current domain
+ * Clear chat history for current project
  */
 async function clearChatHistory() {
-  const domain = window.location.hostname;
+  if (!currentUrl || !currentProjectId) {
+    console.error('Cannot clear chat history: no URL or project ID');
+    return Promise.reject(new Error('No URL or project ID'));
+  }
+
+  const storageKey = `polish_chat_history_${currentUrl}`;
 
   return new Promise((resolve, reject) => {
-    chrome.storage.local.get(['polish_chat_history'], (result) => {
+    chrome.storage.local.get([storageKey], (result) => {
       if (chrome.runtime.lastError) {
         reject(chrome.runtime.lastError);
         return;
       }
 
-      const allHistory = result.polish_chat_history || {};
-      delete allHistory[domain];
+      const urlHistory = result[storageKey] || {};
+      delete urlHistory[currentProjectId];
 
-      chrome.storage.local.set({ polish_chat_history: allHistory }, () => {
+      chrome.storage.local.set({ [storageKey]: urlHistory }, () => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
         } else {
-          console.log(`Chat history cleared for ${domain}`);
+          console.log(`Chat history cleared for project ${currentProjectId} on ${currentUrl}`);
           resolve();
         }
       });
@@ -3517,8 +4067,18 @@ async function clearChatHistory() {
  * Display chat history in the chat messages container
  * @param {Array} messages - Array of message objects
  */
-function displayChatHistory(messages) {
+function displayChatHistory(messagesOrData, project = null) {
   if (!elements.chatMessages) return;
+
+  // Handle both old format (just messages array) and new format (object with messages and project)
+  let messages, projectData;
+  if (Array.isArray(messagesOrData)) {
+    messages = messagesOrData;
+    projectData = project;
+  } else {
+    messages = messagesOrData.messages || [];
+    projectData = messagesOrData.project || project;
+  }
 
   // Clear existing messages
   elements.chatMessages.innerHTML = '';
@@ -3534,9 +4094,57 @@ function displayChatHistory(messages) {
     return;
   }
 
-  // Render each message
-  messages.forEach(msg => {
-    const messageEl = createMessageElement(msg);
+  // Determine which message should be highlighted based on current version
+  // The highlighted message is the last assistant message that made changes up to the current version
+  let activeMessageIndex = -1;
+  let greyOutAll = false; // Flag to grey out all messages (when at version 0 - original state)
+  
+  if (projectData && projectData.versions && projectData.versions.length > 0) {
+    // Determine which version's messages to use for finding the active message
+    let targetVersionIndex = currentVersionIndex;
+    if (targetVersionIndex === null) {
+      // Viewing latest version - highlight the last message that made changes
+      targetVersionIndex = projectData.versions.length - 1;
+    }
+    
+    // If viewing version 0 (original state before any changes), grey out all messages
+    if (targetVersionIndex === 0) {
+      greyOutAll = true;
+      activeMessageIndex = -1; // No active message
+    } else if (targetVersionIndex >= 0 && targetVersionIndex < projectData.versions.length) {
+      // Get messages up to this version
+      const targetVersion = projectData.versions[targetVersionIndex];
+      const versionMessages = targetVersion.chatMessages || [];
+      
+      if (versionMessages.length > 0) {
+        // Find the last assistant message that made changes in this version's messages
+        for (let i = versionMessages.length - 1; i >= 0; i--) {
+          const versionMsg = versionMessages[i];
+          if (versionMsg.role === 'assistant' && 
+              (versionMsg.modifications || versionMsg.mode === 'auto' || versionMsg.mode === 'edit')) {
+            // Find this message's index in the full messages array
+            activeMessageIndex = messages.findIndex(m => m.id === versionMsg.id);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Render each message with highlighting and greyed-out state
+  // All messages are visible, but messages after the highlighted one are greyed out
+  // If at version 0 (original state), all messages are greyed out
+  messages.forEach((msg, index) => {
+    const isActive = (index === activeMessageIndex);
+    let isGreyedOut = false;
+    if (greyOutAll) {
+      // At version 0 - grey out all messages
+      isGreyedOut = true;
+    } else {
+      // Messages after the active one are greyed out
+      isGreyedOut = (activeMessageIndex >= 0 && index > activeMessageIndex);
+    }
+    const messageEl = createMessageElement(msg, isActive, isGreyedOut);
     elements.chatMessages.appendChild(messageEl);
   });
 
@@ -3549,9 +4157,15 @@ function displayChatHistory(messages) {
  * @param {Object} message - Message object
  * @returns {HTMLElement} Message element
  */
-function createMessageElement(message) {
+function createMessageElement(message, isActive = false, isGreyedOut = false) {
   const div = document.createElement('div');
   div.className = `polish-chat-message ${message.role}`;
+  if (isActive) {
+    div.classList.add('polish-message-active');
+  }
+  if (isGreyedOut) {
+    div.classList.add('polish-message-greyed-out');
+  }
   div.setAttribute('data-message-id', message.id);
 
   // Message header (timestamp + mode badge)
@@ -3563,28 +4177,32 @@ function createMessageElement(message) {
   time.textContent = formatTime(message.timestamp);
   header.appendChild(time);
 
-  if (message.mode) {
-    const mode = document.createElement('span');
-    mode.className = 'polish-message-mode';
+  // Mode badge: show "You" for user messages, mode for assistant messages
+  const mode = document.createElement('span');
+  mode.className = 'polish-message-mode';
+  if (message.role === 'user') {
+    mode.textContent = 'You';
+  } else if (message.mode) {
+    // Assistant messages show the mode
     if (message.mode === 'edit') {
       mode.textContent = 'Edit';
     } else if (message.mode === 'chat') {
       mode.textContent = 'Chat';
     } else if (message.mode === 'auto') {
-      mode.textContent = 'Auto';
+      mode.textContent = 'Agent';
     } else {
       mode.textContent = message.mode || 'Edit';
     }
-    header.appendChild(mode);
   }
+  header.appendChild(mode);
 
   div.appendChild(header);
 
-  // Message content (support markdown formatting for chat and auto mode responses)
+  // Message content (support markdown formatting for chat and agent mode responses)
   const content = document.createElement('div');
   content.className = 'polish-message-content';
   
-  // For chat and auto mode assistant messages, render full markdown
+  // For chat and agent mode assistant messages, render full markdown
   if ((message.mode === 'chat' || message.mode === 'auto') && message.role === 'assistant') {
     content.innerHTML = renderMarkdown(message.content);
   } else {
@@ -3620,7 +4238,19 @@ function appendMessageToChat(message) {
     emptyState.remove();
   }
 
-  const messageEl = createMessageElement(message);
+  // Determine if this message should be greyed out (comes after the active one)
+  // Check if there's an active message in the chat
+  const existingMessages = Array.from(elements.chatMessages.querySelectorAll('.polish-chat-message'));
+  const activeMessage = elements.chatMessages.querySelector('.polish-message-active');
+  let isGreyedOut = false;
+  
+  if (activeMessage && existingMessages.length > 0) {
+    const activeIndex = existingMessages.indexOf(activeMessage);
+    // If there's an active message, new messages are always after it and should be greyed out
+    isGreyedOut = activeIndex >= 0;
+  }
+  
+  const messageEl = createMessageElement(message, false, isGreyedOut);
   elements.chatMessages.appendChild(messageEl);
 
   // Auto-scroll to bottom with smooth animation
