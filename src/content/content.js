@@ -376,14 +376,15 @@ async function saveActiveProject() {
     const storageKey = `polish_active_project_${currentUrl}`;
     const activeProjectData = {
       projectId: currentProjectId,
-      projectName: currentProjectName
+      projectName: currentProjectName,
+      versionIndex: currentVersionIndex // Also save the current version index
     };
     
     chrome.storage.local.set({ [storageKey]: activeProjectData }, () => {
       if (chrome.runtime.lastError) {
         console.error('Failed to save active project:', chrome.runtime.lastError);
       } else {
-        console.log(`Saved active project: ${currentProjectName} (${currentProjectId})`);
+        console.log(`Saved active project: ${currentProjectName} (${currentProjectId}), version: ${currentVersionIndex !== null ? currentVersionIndex : 'latest'}`);
       }
       resolve();
     });
@@ -435,7 +436,23 @@ async function loadProjectsForUrl() {
           if (foundProject) {
             currentProjectId = foundProject.id;
             currentProjectName = foundProject.name;
-            currentVersionIndex = null; // Show latest version
+            // Restore saved version index if available and valid
+            if (savedActiveProject.versionIndex !== undefined && savedActiveProject.versionIndex !== null) {
+              // Validate that the version index is within bounds
+              if (foundProject.versions && foundProject.versions.length > 0) {
+                const savedIndex = savedActiveProject.versionIndex;
+                if (savedIndex >= 0 && savedIndex < foundProject.versions.length) {
+                  currentVersionIndex = savedIndex;
+                } else {
+                  // Invalid index - default to latest
+                  currentVersionIndex = null;
+                }
+              } else {
+                currentVersionIndex = null;
+              }
+            } else {
+              currentVersionIndex = null; // Show latest version if no saved index
+            }
             projectToLoad = foundProject;
           }
         }
@@ -472,8 +489,18 @@ async function loadProjectsForUrl() {
         });
       } else if (projectToLoad && !isLiveWebsite(projectToLoad.id)) {
         // Load regular project HTML
-        loadProjectHTML(projectToLoad);
-        resolve();
+        // If we have a saved version index, navigate to that specific version
+        // Otherwise just load the project (which will load latest or specified version)
+        if (currentVersionIndex !== null && projectToLoad.versions && projectToLoad.versions.length > 0) {
+          // Navigate to the specific version (which will load HTML and chat history)
+          navigateToVersion(projectToLoad, currentVersionIndex).then(() => {
+            resolve();
+          });
+        } else {
+          // Load project normally (latest version)
+          loadProjectHTML(projectToLoad);
+          resolve();
+        }
       } else {
         resolve();
       }
@@ -2499,6 +2526,12 @@ function createSettingsOverlay() {
           </div>
           <div id="polish-settings-api-key-status" class="polish-settings-status hidden"></div>
         </div>
+        <div class="polish-settings-section">
+          <label class="polish-settings-label">GitHub</label>
+          <button id="polish-settings-connect-github-btn" class="polish-btn polish-btn-primary polish-btn-text">
+            Connect GitHub
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -3775,6 +3808,9 @@ async function navigateToVersion(project, versionIndex) {
   
   // Update current version index
   currentVersionIndex = versionIndex;
+  
+  // Save the active project with the new version index
+  await saveActiveProject();
   
   // Load the HTML for this version
   try {
