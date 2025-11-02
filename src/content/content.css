@@ -158,6 +158,12 @@
   min-width: auto;
 }
 
+.polish-btn-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .polish-btn-icon {
   padding: 8px;
   width: 32px;
@@ -301,6 +307,46 @@
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   border-left: 3px solid #10b981;
+}
+
+/* Active message highlight (currently displayed version) */
+.polish-chat-message.polish-message-active {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+  animation: polish-message-glow 2s ease-in-out infinite;
+}
+
+@keyframes polish-message-glow {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.6);
+  }
+}
+
+.polish-chat-message.polish-message-active.user {
+  background: #fff7ed;
+  border: 2px solid #f59e0b;
+}
+
+.polish-chat-message.polish-message-active.assistant {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+}
+
+/* Greyed-out messages (coming after the highlighted one) */
+.polish-chat-message.polish-message-greyed-out {
+  opacity: 0.5;
+}
+
+.polish-chat-message.polish-message-greyed-out.user {
+  opacity: 0.5;
+}
+
+.polish-chat-message.polish-message-greyed-out.assistant {
+  opacity: 0.5;
 }
 
 /* Message Header (timestamp + mode badge) */
